@@ -222,7 +222,7 @@ async function collectionDetail(v, id) {
   const ids = () => lastItems.map(p => p.id);
   let lastItems = [];
   const tb = h("div", { class: "toolbar" }, q, sort,
-    h("button", { onclick: () => bulkDialog(id, draw) }, "✏️ Bulk Editor"), h("button", { onclick: () => aiDialog(id, draw) }, "✨ AI Optimize"), h("button", { onclick: () => imageDialog(id) }, "🖼️ Gambar"), h("button", { onclick: () => stockDialog(id, draw) }, "📦 Stok"), h("button", { onclick: () => priceDialog(id) }, "💰 Harga & Kompetitor"), h("button", { onclick: () => analyzeDialog(id, draw) }, "🛡️ Analisis & Bersihkan"),
+    h("button", { onclick: () => imageDialog(id) }, "🖼️ Gambar"), h("button", { onclick: () => bulkDialog(id, draw) }, "✏️ Bulk Editor"), h("button", { onclick: () => aiDialog(id, draw) }, "✨ AI Optimize"), h("button", { onclick: () => stockDialog(id, draw) }, "📦 Stok"), h("button", { onclick: () => priceDialog(id) }, "💰 Harga & Kompetitor"), h("button", { onclick: () => analyzeDialog(id, draw) }, "🛡️ Analisis & Bersihkan"),
     h("button", { onclick: () => dupDialog(id, draw) }, "Duplikat"), h("button", { onclick: () => settingsDialog(id) }, "⚙️ Collection Settings"), h("button", { onclick: () => rightsDialog(id, draw) }, "Hak konten"),
     h("span", { class: "grow" }), h("button", { class: "pri", onclick: () => location.hash = "#/uploader/" + id }, "Upload / Export"));
   const draw = () => guard(async () => {
