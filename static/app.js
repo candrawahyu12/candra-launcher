@@ -628,6 +628,7 @@ async function pgSettings(v) {
       h("h3", { class: "gap" }, "File export"), ex.length ? h("table", {}, ...ex.map(f => h("tr", {}, h("td", {}, f.file), h("td", { class: "small mut" }, f.modified + " · " + f.bytes + " B"), h("td", {}, h("a", { class: "btn", href: "/download/" + encodeURIComponent(f.file), download: f.file }, "Unduh"))))) : h("div", { class: "mut small" }, "Belum ada."),
       h("h3", { class: "gap" }, "Ekstensi Chrome (Capture)"), capCard,
       h("h3", { class: "gap" }, "Pembaruan aplikasi"), upd,
+      h("h3", { class: "gap" }, "Keluar"), h("div", { class: "small mut" }, "Menutup jendela aplikasi tidak menghentikan mesinnya. Klik ini unth berhenti sepenuhnya."), h("button", { class: "danger", onclick: () => { if (confirm("Hentikan CANDRA? Proses yang sedang berjalan akan berhenti.")) guard(async () => { await api("/api/shutdown", {}); document.body.replaceChildren("CANDRA dihentikan. Jendela ini boleh ditutup."); }); } }, "Hentikan CANDRA"),
       h("h3", { class: "gap" }, "Info"), h("div", { class: "small mut" }, "Versi " + ov.version + " · Python " + ov.python + " · DB v" + ov.dbVersion + " · Data: " + ov.dataDir + " · " + ov.collections + " collection, " + ov.products + " produk"));
   };
   v.append(h("h2", {}, "Settings"), box); await draw();

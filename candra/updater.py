@@ -25,7 +25,7 @@ DEFAULT_REPO = "candrawahyu12/candra-launcher"
 ALLOWED_HOSTS = ("api.github.com", "github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com")
 MAX_BYTES = 25 * 1024 * 1024
 ALLOWED_TOP = {"candra", "static", "samples", "tests", ".github", "chrome_extension", "templates"}
-ALLOWED_FILES = {"server.py", "mcp_server.py", "start.bat", "README.md", "candra.env.example", "VERSION"}
+ALLOWED_FILES = {"server.py", "mcp_server.py", "start.bat", "CANDRA.vbs", "README.md", "candra.env.example", "VERSION"}
 REPO_RE = re.compile(r"^[A-Za-z0-9_.\-]{1,39}/[A-Za-z0-9_.\-]{1,100}$")
 
 

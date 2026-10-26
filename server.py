@@ -185,6 +185,9 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
         def route_post(self, path: str, b: dict):
             if path == "/api/sources":
                 return svc.add_source(b["platform"], b["domain"], b.get("permissionNote", ""))
+            if path == "/api/shutdown":
+                threading.Thread(target=lambda: (time.sleep(0.6), os._exit(0)), daemon=True).start()
+                return {"ok": True}
             if path == "/api/update/apply":
                 if b.get("confirm") is not True:
                     raise UpdateError("konfirmasi eksplisit diperlukan (confirm: true)")
@@ -323,10 +326,19 @@ def main() -> None:
     ap.add_argument("--data", default=os.path.join(ROOT, "data"))
     args = ap.parse_args()
     os.makedirs(args.data, exist_ok=True)
+    if sys.stdout is None or sys.stderr is None:  # dijalankan via pythonw (tanpa jendela hitam): catat ke file log
+        log = open(os.path.join(args.data, "server.log"), "a", encoding="utf-8", buffering=1)
+        sys.stdout = sys.stdout or log
+        sys.stderr = sys.stderr or log
     load_env_file(os.path.join(ROOT, "candra.env"))
     svc = CandraService(os.path.join(args.data, "candra.db"), args.data)
     svc.start_worker()
-    httpd = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(svc, args.port, Updater(ROOT)))
+    try:
+        httpd = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(svc, args.port, Updater(ROOT)))
+    except OSError:
+        print(f"Port {args.port} sudah dipakai - CANDRA kemungkinan sudah berjalan.")
+        svc.stop_worker()
+        return
     print(f"CANDRA berjalan di http://127.0.0.1:{args.port}  (data: {args.data})  — Ctrl+C untuk berhenti")
     try:
         httpd.serve_forever()

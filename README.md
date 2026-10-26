@@ -41,3 +41,8 @@ bisa berubah; bila data tidak lengkap, klik ikon ekstensi → "Unduh diagnostik 
 - **Foto bertulisan (nama toko/kontak/marketplace)**: aplikasi TIDAK menghapus watermark/identitas toko dari foto. Gunakan "Kecualikan" (per foto) atau "Kecualikan semua foto bertulisan" di dialog Gambar: foto itu tidak ikut diupload dan file-nya tidak diubah. Alternatif: minta foto polos ke supplier atau pakai foto sendiri.
 - **Tampilan marketplace berubah**: aplikasi tidak bisa belajar sendiri. Yang tersedia: aturan baca-halaman di `candra/capture_rules.json` (ikut pembaruan lewat updater, diambil ekstensi tiap halaman dibuka), indikator "Tidak terbaca: ..." di panel, dan "Unduh diagnostik halaman" di popup untuk memperbaiki aturan.
 - Migrasi DB v5 (`product_variants.image_url`).
+
+## v0.7.1 — Peluncur tanpa jendela hitam
+- Klik dua kali `CANDRA.vbs`: server jalan di latar belakang (pythonw) dan jendela aplikasi terbuka tanpa tab/address bar (Edge mode app). Log ada di `data/server.log`.
+- Berhenti sepenuhnya: Settings → "Hentikan CANDRA".
+- Perbaikan CI rilis: Pillow dipasang sebelum tes.
