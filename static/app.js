@@ -385,6 +385,7 @@ function imageDialog(id) {
       out.replaceChildren(h("div", { class: "mut" }, "Memproses gambar… (bisa beberapa menit)"));
       const r = await api("/api/collections/" + id + "/images", { marketplace: mkt.value, force, shopNames: shops.value.split(",").map(x => x.trim()).filter(Boolean) });
       out.replaceChildren(h("div", { class: "note" }, Object.entries(r.counts).map(([k, n]) => k + ": " + n).join(" · ") || "Tidak ada gambar diproses", r.skippedProductsRights ? " · " + r.skippedProductsRights + " produk dilewati (hak konten belum terverifikasi)" : ""),
+        r.storage && r.storage.over ? h("div", { class: "note gap" }, "Folder data melewati batas " + r.storage.limitMb + " MB. Buka Settings → Penyimpanan untuk membersihkan foto yang sudah terupload.") : null,
         !r.ocrAvailable ? h("div", { class: "note gap" }, "Pembaca tulisan (tesseract) tidak terpasang: gambar berstatus UNCHECKED, tulisan supplier/Shopee di gambar belum bisa dideteksi.") : null,
         r.attention.length ? h("table", { class: "gap" }, h("thead", {}, h("tr", {}, h("th", {}, "Produk"), h("th", {}, "Status"), h("th", {}, "Temuan"), h("th", {}, ""))),
           h("tbody", {}, ...r.attention.map(a => h("tr", {}, h("td", {}, "#" + a.productId + " "), h("td", {}, h("span", { class: "badge " + (a.status === "REVIEW" ? "bad" : "warn") }, a.status)), h("td", { class: "small mut" }, a.flags.join(", ")),
@@ -617,6 +618,20 @@ async function pgSettings(v) {
       h("div", { class: "row" }, tok, h("button", { class: "sm", onclick: () => { tok.type = tok.type === "password" ? "text" : "password"; } }, "Tampilkan"), h("button", { class: "sm", onclick: () => { navigator.clipboard.writeText(t.token).then(() => toast("Token disalin")); } }, "Salin")),
       h("div", { class: "note gap" }, "Produk hasil capture berstatus hak konten \"belum diverifikasi\": tidak bisa diupload sebelum Anda menyatakan hak atasnya (Collection → Hak konten). Foto dan teks penjual lain umumnya dilindungi hak cipta."));
   }).catch(() => { });
+  const storCard = h("div", {});
+  const mb = n => (n / 1048576).toFixed(n > 1048576 * 10 ? 0 : 1) + " MB";
+  const drawStor = () => api("/api/storage").then(r => {
+    const lim = h("input", { type: "number", min: 100, value: r.limitMb, style: "width:100px" });
+    storCard.replaceChildren(
+      h("div", { class: "note" }, "Terpakai " + mb(r.usedBytes) + " dari batas " + r.limitMb + " MB (" + r.percent + "%)" + (r.over ? " — MELEWATI BATAS" : "")),
+      h("table", { class: "gap" }, ...Object.entries({ images: "Foto olahan", exports: "File export", database: "Database", other: "Lainnya (log, token, dll.)" }).map(([k, l]) => h("tr", {}, h("td", {}, l), h("td", {}, mb(r.parts[k]))))),
+      h("div", { class: "small mut gap" }, "Bisa dibersihkan: " + r.cleanableImages.files + " foto olahan (" + mb(r.cleanableImages.bytes) + ") yang sudah terupload, dikecualikan, gagal, atau yatim. Foto yang masih menunggu tinjauan/upload TIDAK dihapus. Foto asli di sumber tidak tersentuh. Aplikasi membersihkan otomatis hanya bila melewati batas."),
+      h("div", { class: "row gap" }, h("button", { class: "pri", disabled: !r.cleanableImages.files, onclick: () => guard(async () => {
+        const pv = await api("/api/storage/cleanup", { apply: false });
+        if (confirm("Hapus " + pv.files + " foto olahan (" + mb(pv.bytes) + ")? Foto yang sudah terupload bisa diproses ulang bila perlu.")) { const x = await api("/api/storage/cleanup", { apply: true }); toast("Dibersihkan: " + mb(x.freedBytes)); drawStor(); }
+      }) }, "🧹 Bersihkan foto olahan"), h("span", { class: "grow" }), h("label", {}, "Batas (MB)", lim), h("button", { class: "sm", onclick: () => guard(async () => { await api("/api/storage/limit", { limitMb: +lim.value }); toast("Batas disimpan"); drawStor(); }) }, "Simpan")));
+  }).catch(() => { });
+  drawStor();
   const box = h("div", { class: "card" });
   const draw = async () => {
     const [ai, ov, ex] = await Promise.all([api("/api/ai"), api("/api/overview"), api("/api/exports")]);
@@ -628,7 +643,8 @@ async function pgSettings(v) {
       h("h3", { class: "gap" }, "File export"), ex.length ? h("table", {}, ...ex.map(f => h("tr", {}, h("td", {}, f.file), h("td", { class: "small mut" }, f.modified + " · " + f.bytes + " B"), h("td", {}, h("a", { class: "btn", href: "/download/" + encodeURIComponent(f.file), download: f.file }, "Unduh"))))) : h("div", { class: "mut small" }, "Belum ada."),
       h("h3", { class: "gap" }, "Ekstensi Chrome (Capture)"), capCard,
       h("h3", { class: "gap" }, "Pembaruan aplikasi"), upd,
-      h("h3", { class: "gap" }, "Keluar"), h("div", { class: "small mut" }, "Menutup jendela aplikasi tidak menghentikan mesinnya. Klik ini unth berhenti sepenuhnya."), h("button", { class: "danger", onclick: () => { if (confirm("Hentikan CANDRA? Proses yang sedang berjalan akan berhenti.")) guard(async () => { await api("/api/shutdown", {}); document.body.replaceChildren("CANDRA dihentikan. Jendela ini boleh ditutup."); }); } }, "Hentikan CANDRA"),
+      h("h3", { class: "gap" }, "Penyimpanan"), storCard,
+      h("h3", { class: "gap" }, "Keluar"), h("div", { class: "small mut" }, "Menutup jendela aplikasi tidak menghentikan mesinnya. Klik ini untuk berhenti sepenuhnya."), h("button", { class: "danger", onclick: () => { if (confirm("Hentikan CANDRA? Proses yang sedang berjalan akan berhenti.")) guard(async () => { await api("/api/shutdown", {}); document.body.replaceChildren("CANDRA dihentikan. Jendela ini boleh ditutup."); }); } }, "Hentikan CANDRA"),
       h("h3", { class: "gap" }, "Info"), h("div", { class: "small mut" }, "Versi " + ov.version + " · Python " + ov.python + " · DB v" + ov.dbVersion + " · Data: " + ov.dataDir + " · " + ov.collections + " collection, " + ov.products + " produk"));
   };
   v.append(h("h2", {}, "Settings"), box); await draw();

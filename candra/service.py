@@ -756,6 +756,139 @@ class CandraService:
             raise PermissionError("token ekstensi salah")
         return capmod.load_rules()
 
+    # ------------------------------------------------------------ penyimpanan: laporan, pembersihan, batas
+    DEFAULT_STORAGE_LIMIT_MB = 2048
+
+    @staticmethod
+    def _tree_size(path: str) -> int:
+        total = 0
+        for root, _d, files in os.walk(path):
+            for f in files:
+                try:
+                    total += os.path.getsize(os.path.join(root, f))
+                except OSError:
+                    pass
+        return total
+
+    def storage_limit_mb(self) -> int:
+        try:
+            return max(100, int(self._setting("storage_limit_mb") or self.DEFAULT_STORAGE_LIMIT_MB))
+        except ValueError:
+            return self.DEFAULT_STORAGE_LIMIT_MB
+
+    def set_storage_limit(self, mb) -> dict:
+        try:
+            mb = int(mb)
+        except (TypeError, ValueError):
+            raise ServiceError("batas harus angka (MB)")
+        if not 100 <= mb <= 1_000_000:
+            raise ServiceError("batas harus 100 - 1.000.000 MB")
+        self._set_setting("storage_limit_mb", str(mb))
+        return self.storage_report()
+
+    def _image_cleanup_candidates(self, collection_id: Optional[int] = None) -> list[dict]:
+        """Berkas gambar olahan yang AMAN dihapus: produknya sudah sukses diupload ke marketplace itu, gambarnya
+        dikecualikan/gagal/terlalu kecil, atau berkas yatim. Gambar yang masih menunggu tinjauan/upload TIDAK pernah ikut."""
+        out: list[dict] = []
+        known: set[str] = set()
+        sql = ("SELECT a.image_id, a.marketplace, a.local_path, a.bytes, a.status, a.updated_at, i.product_id FROM image_assets a"
+               " LEFT JOIN product_images i ON i.id=a.image_id WHERE a.local_path IS NOT NULL AND a.local_path<>''")
+        for a in self.db.query(sql):
+            known.add(os.path.abspath(a["local_path"]))
+            if collection_id is not None:
+                inc = self.db.one("SELECT 1 x FROM collection_products WHERE collection_id=? AND product_id=?", (collection_id, a["product_id"]))
+                if not inc:
+                    continue
+            if not os.path.isfile(a["local_path"]):
+                continue
+            reason = None
+            if a["product_id"] is None:
+                reason = "orphan"
+            elif a["status"] in ("EXCLUDED", "ERROR", "TOO_SMALL"):
+                reason = "unused"
+            elif a["status"] in ("OK", "APPROVED"):
+                done = self.db.one(
+                    "SELECT 1 x FROM upload_items ui JOIN upload_batches b ON b.id=ui.batch_id WHERE ui.product_id=? AND ui.status='SUCCEEDED'"
+                    " AND b.target_platform=?", (a["product_id"], a["marketplace"]))
+                if done:
+                    reason = "uploaded"
+            if reason:
+                out.append({"imageId": a["image_id"], "path": a["local_path"], "bytes": os.path.getsize(a["local_path"]),
+                            "status": a["status"], "reason": reason, "updatedAt": a["updated_at"]})
+        if collection_id is None and os.path.isdir(self.image_dir):  # berkas yatim: ada di disk, tidak tercatat di DB
+            for root, _d, files in os.walk(self.image_dir):
+                for f in files:
+                    fp = os.path.abspath(os.path.join(root, f))
+                    if fp not in known:
+                        out.append({"imageId": None, "path": fp, "bytes": os.path.getsize(fp), "status": None, "reason": "orphan_file", "updatedAt": ""})
+        return out
+
+    def cleanup_images(self, collection_id: Optional[int] = None, apply: bool = False) -> dict:
+        """Hapus berkas gambar olahan yang sudah tidak dibutuhkan. Pratinjau dulu (apply=False). Gambar asli di sumber tidak tersentuh;
+        gambar yang dikecualikan tetap berstatus EXCLUDED, yang sudah terupload ditandai CLEANED (diproses ulang bila perlu)."""
+        cands = self._image_cleanup_candidates(collection_id)
+        by_reason: dict[str, dict] = {}
+        for c in cands:
+            r = by_reason.setdefault(c["reason"], {"files": 0, "bytes": 0})
+            r["files"] += 1; r["bytes"] += c["bytes"]
+        freed = 0
+        if apply:
+            image_root = os.path.abspath(self.image_dir) + os.sep
+            for c in cands:
+                path = os.path.abspath(c["path"])
+                if not path.startswith(image_root):  # jangan pernah menghapus di luar folder gambar
+                    continue
+                try:
+                    os.remove(path); freed += c["bytes"]
+                except OSError:
+                    continue
+                if c["imageId"] is not None:
+                    new_status = c["status"] if c["status"] in ("EXCLUDED", "ERROR", "TOO_SMALL") else "CLEANED"
+                    self.db.execute("UPDATE image_assets SET local_path=NULL, status=?, updated_at=? WHERE image_id=?", (new_status, now(), c["imageId"]))
+        return {"applied": apply, "files": len(cands), "bytes": sum(c["bytes"] for c in cands), "freedBytes": freed, "byReason": by_reason}
+
+    def _old_exports(self, keep: int = 5, days: int = 30) -> list[str]:
+        if not os.path.isdir(self.export_dir):
+            return []
+        files = sorted((os.path.join(self.export_dir, f) for f in os.listdir(self.export_dir) if os.path.isfile(os.path.join(self.export_dir, f))),
+                       key=os.path.getmtime, reverse=True)
+        cutoff = time.time() - days * 86400
+        return [f for f in files[keep:] if os.path.getmtime(f) < cutoff]
+
+    def storage_report(self) -> dict:
+        limit = self.storage_limit_mb() * 1024 * 1024
+        parts = {"images": self._tree_size(self.image_dir) if os.path.isdir(self.image_dir) else 0,
+                 "exports": self._tree_size(self.export_dir) if os.path.isdir(self.export_dir) else 0}
+        total = self._tree_size(self.data_dir)
+        db_bytes = sum(os.path.getsize(os.path.join(self.data_dir, f)) for f in os.listdir(self.data_dir)
+                       if f.startswith("candra.db") and os.path.isfile(os.path.join(self.data_dir, f)))
+        parts["database"] = db_bytes
+        parts["other"] = max(0, total - parts["images"] - parts["exports"] - db_bytes)
+        cl = self.cleanup_images(apply=False)
+        return {"limitMb": self.storage_limit_mb(), "usedBytes": total, "limitBytes": limit, "over": total > limit,
+                "percent": round(total * 100 / limit, 1), "parts": parts, "cleanableImages": {"files": cl["files"], "bytes": cl["bytes"]},
+                "oldExports": {"files": len(self._old_exports()), "bytes": sum(os.path.getsize(f) for f in self._old_exports())}}
+
+    def enforce_storage_limit(self) -> dict:
+        """Dipanggil otomatis saat mulai & setelah olah gambar: bila lewat batas, hapus yang aman saja (gambar tak terpakai, ekspor lama, log besar).
+        Gambar yang masih dibutuhkan tidak pernah dihapus; bila masih lewat batas, pengguna diberi peringatan."""
+        rep = self.storage_report()
+        if not rep["over"]:
+            return {"acted": False, "report": rep}
+        res = self.cleanup_images(apply=True)
+        for f in self._old_exports():
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+        log = os.path.join(self.data_dir, "server.log")
+        if os.path.isfile(log) and os.path.getsize(log) > 5 * 1024 * 1024:
+            open(log, "w").close()
+        rep2 = self.storage_report()
+        self.db.event("storage", None, "warn" if rep2["over"] else "info", "STORAGE_CLEANED" if not rep2["over"] else "STORAGE_STILL_OVER",
+                      f"pembersihan otomatis: {res['files']} berkas gambar dihapus" + (" - masih melewati batas, tinjau/unggah gambar lalu bersihkan" if rep2["over"] else ""), {})
+        return {"acted": True, "cleanup": res, "report": rep2}
+
     # ------------------------------------------------------------ gambar: syarat marketplace + deteksi tulisan
     def image_status(self) -> dict:
         return {"pillow": imgmod.pillow_available(), "ocr": imgmod.ocr_available() or self.ocr_runner is not None,
@@ -806,7 +939,8 @@ class CandraService:
                 if status != "OK":
                     attention.append({"imageId": im["id"], "productId": p["id"], "status": status, "flags": flags, "url": im["source_url"]})
         self.db.event("system", collection_id, "info", "IMAGES_PROCESSED", f"{marketplace}: {counts}")
-        return {"marketplace": marketplace, "counts": counts, "skippedProductsRights": skipped_rights, "attention": attention[:200],
+        st = self.enforce_storage_limit()["report"]
+        return {"marketplace": marketplace, "counts": counts, "storage": {"percent": st["percent"], "over": st["over"], "limitMb": st["limitMb"]}, "skippedProductsRights": skipped_rights, "attention": attention[:200],
                 "ocrAvailable": imgmod.ocr_available() or self.ocr_runner is not None}
 
     def exclude_image(self, image_id: int, marketplace: str) -> dict:

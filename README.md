@@ -46,3 +46,8 @@ bisa berubah; bila data tidak lengkap, klik ikon ekstensi → "Unduh diagnostik 
 - Klik dua kali `CANDRA.vbs`: server jalan di latar belakang (pythonw) dan jendela aplikasi terbuka tanpa tab/address bar (Edge mode app). Log ada di `data/server.log`.
 - Berhenti sepenuhnya: Settings → "Hentikan CANDRA".
 - Perbaikan CI rilis: Pillow dipasang sebelum tes.
+
+## v0.8.0 — Penyimpanan terkendali
+- Settings → **Penyimpanan**: rincian ruang (foto olahan, export, database, lainnya), batas ruang (default 2048 MB) dan tombol **Bersihkan foto olahan**.
+- Yang dihapus hanya foto olahan yang aman: produknya sudah sukses diupload ke marketplace itu, dikecualikan, gagal/terlalu kecil, atau berkas yatim. Foto yang menunggu tinjauan/upload tidak pernah dihapus; foto asli di sumber tidak tersentuh. Selalu ada pratinjau dan konfirmasi.
+- Bila folder data melewati batas (dicek saat aplikasi mulai dan setelah olah gambar), aplikasi menghapus hanya yang aman (foto tak terpakai, export > 30 hari, log besar) dan memberi peringatan bila masih lewat batas.

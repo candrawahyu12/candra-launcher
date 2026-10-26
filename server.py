@@ -144,6 +144,8 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
                 return svc.capture_rules(self.headers.get("X-Candra-Token"))
             if path == "/api/capture/token":
                 return {"token": svc.capture_token}
+            if path == "/api/storage":
+                return svc.storage_report()
             if path == "/api/overview":
                 return svc.overview()
             if path == "/api/processes":
@@ -185,6 +187,11 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
         def route_post(self, path: str, b: dict):
             if path == "/api/sources":
                 return svc.add_source(b["platform"], b["domain"], b.get("permissionNote", ""))
+            if path == "/api/storage/limit":
+                return svc.set_storage_limit(b.get("limitMb"))
+            if path == "/api/storage/cleanup":
+                cid = b.get("collectionId")
+                return svc.cleanup_images(int(cid) if cid else None, apply=b.get("apply") is True)
             if path == "/api/shutdown":
                 threading.Thread(target=lambda: (time.sleep(0.6), os._exit(0)), daemon=True).start()
                 return {"ok": True}

@@ -344,6 +344,38 @@ class ImageAndPriceTests(unittest.TestCase):
         self.assertNotIn("IMAGE_TEXT_REVIEW", pv["errorsByCode"])
         self.assertTrue("NO_IMAGE" in pv["errorsByCode"] or "IMAGES_EXCLUDED" in str(pv))  # semua dikecualikan = produk tanpa foto
 
+    def test_cleanup_only_safe_images_and_limit(self):
+        import os
+        self.ocr_text = "Kaos polos"
+        self.svc.process_images(self.col, "sandbox")
+        rows = self.svc.db.query("SELECT image_id, local_path FROM image_assets")
+        self.assertTrue(rows)
+        self.assertEqual(self.svc.cleanup_images(apply=True)["files"], 0)          # belum terupload: tidak ada yang boleh dihapus
+        self.assertTrue(all(os.path.isfile(r["local_path"]) for r in rows))
+        # yatim: berkas di folder gambar yang tidak tercatat
+        orphan = os.path.join(self.svc.image_dir, "sandbox", "orphan.jpg"); open(orphan, "wb").write(b"x" * 100)
+        # produk pertama dianggap sukses diupload
+        pid = self.svc.db.one("SELECT product_id FROM product_images WHERE id=?", (rows[0]["image_id"],))["product_id"]
+        self.svc.db.execute("INSERT INTO upload_batches(collection_id,target_platform,status,created_at) VALUES(?,?,?,?)",
+                            (self.col, "sandbox", "SUCCEEDED", "2026-01-01"))
+        bid = self.svc.db.one("SELECT MAX(id) m FROM upload_batches")["m"]
+        self.svc.db.execute("INSERT INTO upload_items(batch_id,product_id,item_key,status,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+                            (bid, pid, "k", "SUCCEEDED", "2026-01-01", "2026-01-01"))
+        pv = self.svc.cleanup_images(apply=False)
+        self.assertGreater(pv["files"], 0); self.assertTrue(os.path.isfile(orphan))  # pratinjau tidak menghapus
+        r = self.svc.cleanup_images(apply=True)
+        self.assertGreater(r["freedBytes"], 0); self.assertFalse(os.path.isfile(orphan))
+        mine = self.svc.db.query("SELECT i.product_id, a.status, a.local_path FROM image_assets a JOIN product_images i ON i.id=a.image_id")
+        for m in mine:
+            if m["product_id"] == pid:
+                self.assertEqual((m["status"], m["local_path"]), ("CLEANED", None))
+            else:
+                self.assertTrue(os.path.isfile(m["local_path"]))                   # produk lain tidak tersentuh
+        with self.assertRaises(ServiceError):
+            self.svc.set_storage_limit(5)
+        self.svc.set_storage_limit(100)
+        self.assertEqual(self.svc.storage_report()["limitMb"], 100)
+
     def test_clean_images_ok_and_unchecked_without_ocr(self):
         self.ocr_text = "Kaos polos"
         r = self.svc.process_images(self.col, "sandbox", force=True)
