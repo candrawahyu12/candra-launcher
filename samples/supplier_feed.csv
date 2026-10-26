@@ -1,0 +1,7 @@
+id,judul,deskripsi,harga,stok,kategori,gambar,berat,varian,sku_varian,harga_varian,stok_varian
+KP-001,KAOS POLOS KATUN COMBED 30S,"Bahan katun combed 30s, ukuran M-XL. Hubungi kami di 0812-3456-7890 untuk order. Follow toko kami!",Rp 45.000,100,Fashion Pria,https://img.example.com/kp001-a.jpg|https://img.example.com/kp001-b.jpg,200,Warna: Hitam | Ukuran: M,KP-001-HM,Rp 45.000,30
+KP-001,,,,,,,,Warna: Hitam | Ukuran: L,KP-001-HL,Rp 47.000,25
+KP-001,,,,,,,,Warna: Putih | Ukuran: M,KP-001-PM,Rp 45.000,45
+CL-010,Celana Chino Slim Fit,"Celana chino bahan twill stretch, berat 450 gram. Garansi jahitan 30 hari.","189.000",40,Fashion Pria,https://img.example.com/cl010.jpg,450,,,,
+TS-777,Tas Selempang Anti Air,"Tas selempang ukuran 25 x 18 cm, kapasitas 5 liter. WA: 08111222333",89500,0,Tas Pria,https://img.example.com/ts777.jpg,300,,,,
+BAD-1,Produk Tanpa Harga,Contoh baris yang gagal validasi,,10,Lain-lain,https://img.example.com/bad.jpg,100,,,,

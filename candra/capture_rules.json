@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "variant_headings": "^(warna|ukuran|varian|variasi|pilihan|size|color|colour|model|tipe|motif|jenis|paket)\\b",
+  "price_regex": "Rp\\s?[\\d.]+(?:,\\d+)?(?:\\s?-\\s?Rp\\s?[\\d.]+(?:,\\d+)?)?",
+  "sold_regex": "([\\d.,]+\\s?(?:rb|k|jt)?\\+?)\\s*terjual",
+  "rating_regex": "(\\d\\.\\d)\\s*(?:\\/\\s*5)?\\s*(?:[\\d.,]+\\s?(?:rb|k)?\\+?\\s*)?(?:penilaian|ulasan|rating)",
+  "review_regex": "([\\d.,]+\\s?(?:rb|k)?\\+?)\\s*(?:penilaian|ulasan)",
+  "stock_regex": "(?:stok|tersisa)\\s*:?\\s*(\\d+)",
+  "description_headings": "^(deskripsi( produk)?|detail produk|rincian produk)$",
+  "image_url_hint": "susercontent|tokopedia|tiktok|image",
+  "gallery_min_px": 250,
+  "tokopedia_non_product_segments": ["search", "p", "discovery", "find", "promo", "help", "cart", "about"],
+  "click_delay_ms": 350,
+  "max_variant_combos": 30
+}

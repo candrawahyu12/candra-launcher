@@ -1,0 +1,7 @@
+data/
+backups/
+__pycache__/
+*.pyc
+candra.env
+_engine_alt/
+*.bak-v*

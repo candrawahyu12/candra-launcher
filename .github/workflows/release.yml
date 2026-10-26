@@ -1,0 +1,29 @@
+name: release
+on:
+  push:
+    tags: ["v*.*.*"]
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: python -m unittest discover -s tests
+      - name: Cek versi sama dengan tag
+        run: |
+          V=$(python -c "import candra;print(candra.__version__)")
+          [ "v$V" = "${GITHUB_REF_NAME}" ] || { echo "versi $V != tag ${GITHUB_REF_NAME}"; exit 1; }
+      - name: Bangun zip + checksum
+        run: |
+          N=candra-launcher-${GITHUB_REF_NAME#v}.zip
+          zip -qr "$N" candra static samples templates chrome_extension tests server.py mcp_server.py start.bat README.md candra.env.example -x "*/__pycache__/*"
+          sha256sum "$N" > "$N.sha256"
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            candra-launcher-*.zip
+            candra-launcher-*.zip.sha256
+          generate_release_notes: true

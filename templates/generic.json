@@ -1,0 +1,103 @@
+{
+  "name": "Generik CANDRA",
+  "version": "candra-1",
+  "status": "OK",
+  "title_max": 100,
+  "desc_max": 3000,
+  "max_images": 9,
+  "note": "Format CSV generik CANDRA.",
+  "columns": [
+    {
+      "header": "SKU Induk",
+      "field": "parent_sku"
+    },
+    {
+      "header": "SKU",
+      "field": "sku"
+    },
+    {
+      "header": "Nama Produk",
+      "field": "title"
+    },
+    {
+      "header": "Deskripsi",
+      "field": "description"
+    },
+    {
+      "header": "ID Kategori",
+      "field": "category_id"
+    },
+    {
+      "header": "Kategori",
+      "field": "category_label"
+    },
+    {
+      "header": "Merek",
+      "field": "brand"
+    },
+    {
+      "header": "COD",
+      "field": "cod"
+    },
+    {
+      "header": "Atribut",
+      "field": "attributes"
+    },
+    {
+      "header": "Harga",
+      "field": "price"
+    },
+    {
+      "header": "Stok",
+      "field": "stock"
+    },
+    {
+      "header": "Berat (gram)",
+      "field": "weight_gram"
+    },
+    {
+      "header": "Nama Varian",
+      "field": "variant_name"
+    },
+    {
+      "header": "Nilai Varian",
+      "field": "variant_value"
+    },
+    {
+      "header": "Gambar 1",
+      "field": "image_1"
+    },
+    {
+      "header": "Gambar 2",
+      "field": "image_2"
+    },
+    {
+      "header": "Gambar 3",
+      "field": "image_3"
+    },
+    {
+      "header": "Gambar 4",
+      "field": "image_4"
+    },
+    {
+      "header": "Gambar 5",
+      "field": "image_5"
+    },
+    {
+      "header": "Gambar 6",
+      "field": "image_6"
+    },
+    {
+      "header": "Gambar 7",
+      "field": "image_7"
+    },
+    {
+      "header": "Gambar 8",
+      "field": "image_8"
+    },
+    {
+      "header": "Gambar 9",
+      "field": "image_9"
+    }
+  ]
+}

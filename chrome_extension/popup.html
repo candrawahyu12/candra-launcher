@@ -1,0 +1,9 @@
+<!doctype html><meta charset="utf-8">
+<style>body{font:13px system-ui;width:320px;margin:12px}label{display:block;margin:8px 0 2px;color:#555}input{width:100%;box-sizing:border-box;padding:6px}button{margin-top:10px;padding:6px 10px}#m{margin-top:8px;color:#0a6}.e{color:#c22!important}</style>
+<h3 style="margin:0 0 4px">CANDRA Capture</h3>
+<div style="color:#666">Kirim data dari halaman yang Anda buka sendiri ke aplikasi CANDRA.</div>
+<label>Alamat aplikasi</label><input id="base" placeholder="http://127.0.0.1:8765">
+<label>Token (CANDRA &gt; Settings &gt; Ekstensi Chrome)</label><input id="token" type="password">
+<label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="deep" style="width:auto"> Ambil harga &amp; foto tiap varian (klik varian otomatis di halaman Anda)</label>
+<button id="save">Simpan & tes koneksi</button> <button id="diag">Unduh diagnostik halaman</button>
+<div id="m"></div><script src="popup.js"></script>
