@@ -9,6 +9,7 @@ import argparse
 import json
 import os
 import re
+from typing import Optional
 import sys
 import threading
 import time
@@ -36,6 +37,36 @@ def load_env_file(path: str) -> None:
         if line and not line.startswith("#") and "=" in line:
             k, v = line.split("=", 1)
             os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+KEY_RE = re.compile(r"^[A-Za-z0-9_\-]{20,120}$")
+
+
+def write_env_value(path: str, name: str, value: Optional[str]) -> None:
+    """Tulis/ubah/hapus satu baris NAME=VALUE di candra.env (file lokal di folder aplikasi), baris lain dipertahankan.
+    Nilai TIDAK pernah ke database/log/respons."""
+    lines = []
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    out, done = [], False
+    for ln in lines:
+        if ln.split("=", 1)[0].strip() == name and not ln.lstrip().startswith("#"):
+            if value is not None and not done:
+                out.append(f"{name}={value}")
+            done = True
+        else:
+            out.append(ln)
+    if value is not None and not done:
+        out.append(f"{name}={value}")
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write("\n".join(out) + "\n")
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    os.replace(tmp, path)
 
 
 def schedule_restart() -> None:
@@ -130,6 +161,8 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
                 return {"ok": True, "dbVersion": svc.db.version}
             if path == "/api/update/check":
                 return {k: v for k, v in updater.check().items() if not k.startswith("_")} | {"backups": updater.backups()}
+            if path == "/api/categories/overview":
+                return svc.category_mapping_overview()
             if path == "/api/categories/info":
                 return svc.category_list_info()
             if path == "/api/categories/search":
@@ -212,6 +245,13 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
                 r = updater.rollback()
                 schedule_restart()
                 return r
+            if m := re.fullmatch(r"/api/collections/(\d+)/auto-categories", path):
+                return svc.auto_map_categories(int(m[1]), b.get("marketplace", ""), bool(b.get("useAi")), b.get("apply") is True,
+                                               b.get("onlyUnmapped", True) is not False, b.get("productIds"))
+            if m := re.fullmatch(r"/api/collections/(\d+)/clear-categories", path):
+                return svc.clear_product_categories(int(m[1]), b.get("marketplace", ""), b.get("onlyAuto", True) is not False)
+            if path == "/api/product-category":
+                return svc.set_product_category(int(b["productId"]), b.get("marketplace", ""), str(b.get("categoryId", "")))
             if path == "/api/categories/import":
                 return svc.import_categories(b.get("marketplace", ""), b.get("csvText", ""))
             if m := re.fullmatch(r"/api/collections/(\d+)/suggest-categories", path):
@@ -253,6 +293,18 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
                 return svc.capture_products(b.get("items"), self.headers.get("X-Candra-Token"))
             if path == "/api/validate-urls":
                 return svc.validate_urls(b.get("sourcePlatform", "web_jsonld"), b.get("inputMode", "detail_urls"), b.get("lines") or [])
+            if path == "/api/ai/key":
+                k = str(b.get("key", "")).strip()
+                env_path = os.path.join(ROOT, "candra.env")
+                if k == "":
+                    write_env_value(env_path, "GEMINI_API_KEY", None)
+                    os.environ.pop("GEMINI_API_KEY", None)
+                    return {"configured": False}
+                if not KEY_RE.match(k):
+                    raise ServiceError("format kunci tidak valid (huruf/angka/_/-, 20-120 karakter). Salin ulang dari Google AI Studio.")
+                write_env_value(env_path, "GEMINI_API_KEY", k)
+                os.environ["GEMINI_API_KEY"] = k
+                return {"configured": True}
             if path == "/api/ai/provider":
                 return svc.set_ai_provider(b.get("name", ""))
             if path == "/api/ai/test":

@@ -123,12 +123,12 @@ def normalize(raw: dict) -> tuple[str, dict]:
         p["rating"] = None
     p["review_count"] = parse_count(raw.get("review_count"))
     imgs = []
-    for u in (raw.get("images") or [])[:MAX_IMAGES * 2]:
+    for u in (raw.get("images") if isinstance(raw.get("images"), list) else [])[:MAX_IMAGES * 2]:
         u = str(u)
         if u.startswith("https://") and len(u) <= 600 and u not in imgs:
             imgs.append(u)
     p["images"] = imgs[:MAX_IMAGES]
-    for i, v in enumerate((raw.get("variants") or [])[:MAX_VARIANTS], 1):
+    for i, v in enumerate((raw.get("variants") if isinstance(raw.get("variants"), list) else [])[:MAX_VARIANTS], 1):
         if not isinstance(v, dict):
             continue
         opts = {str(k)[:40]: str(x)[:60] for k, x in (v.get("options") or {}).items()} if isinstance(v.get("options"), dict) else {}

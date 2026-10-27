@@ -139,7 +139,7 @@ def solve_price(cost, comps, overrides=None, category_text: str = "", margin_pct
     cost, extra, m = D(cost), D(extra_cost), D(margin_pct) / 100
     if cost <= 0:
         raise FeeError("modal harus > 0")
-    pct = sum(D(c["value"]) for c in _effective(comps, overrides or [], category_text) if c["kind"] == "percent") / 100
+    pct = sum((D(c["value"]) for c in _effective(comps, overrides or [], category_text) if c["kind"] == "percent"), D(0)) / 100
     if pct + m >= 1:
         # dengan batas maksimum biaya masih mungkin layak; tetap coba, tapi batasi pencarian
         pass

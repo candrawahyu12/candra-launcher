@@ -512,6 +512,35 @@ function priceDialog(id) {
     h("details", { class: "gap" }, h("summary", {}, "Impor harga kompetitor (CSV)"), csv, h("button", { class: "sm", onclick: () => guard(async () => { const r = await api("/api/collections/" + id + "/competitors-import", { csvText: csv.value }); toast(r.imported + " harga diimpor" + (r.problems.length ? ", " + r.problems.length + " baris bermasalah" : ""), r.problems.length > 0); run(); }) }, "Impor")), out), true);
 }
 
+/* ---------- Kategori otomatis per produk ---------- */
+function catPicker(mk, onPick) {
+  const q = h("input", { placeholder: "cari kategori (mis. kaos pria)", style: "width:190px" }), res = h("select", { style: "max-width:320px" }), go = h("button", { class: "sm" }, "Pakai");
+  let last = [];
+  q.oninput = () => guard(async () => {
+    if (q.value.trim().length < 3) return;
+    last = await api("/api/categories/search?marketplace=" + mk + "&q=" + encodeURIComponent(q.value) + "&limit=10");
+    res.replaceChildren(...last.map(x => h("option", { value: x.id }, x.path + " (" + x.id + ")")));
+  });
+  go.onclick = () => { if (res.value) onPick(res.value); };
+  return h("div", { class: "row" }, q, res, go);
+}
+function autoCatDialog(colId, mk, after) {
+  const useAi = h("input", { type: "checkbox" }), out = h("div", { class: "gap" });
+  const run = apply => guard(async () => {
+    out.replaceChildren(h("div", { class: "mut" }, "Memetakan kategori…"));
+    let r;
+    try { r = await api("/api/collections/" + colId + "/auto-categories", { marketplace: mk, useAi: useAi.checked, apply, onlyUnmapped: true }); } catch (e) { out.replaceChildren(); throw e; }
+    const sm = r.summary;
+    out.replaceChildren(h("div", { class: "note" }, (apply ? "Diterapkan: " + r.applied + " produk. " : "Pratinjau: ") + "otomatis (kata kunci) " + sm.auto + " · AI " + sm.ai + " · perlu tinjau " + sm.needsReview + " · sudah terisi " + sm.alreadyMapped + ". Hasil otomatis/AI tetap bertanda perlu ditinjau di preview upload." + (r.aiNote ? " " + r.aiNote : "")),
+      h("div", { style: "overflow:auto;max-height:380px" }, h("table", {}, h("tbody", {}, ...r.items.filter(i => !i.skipped).map(i => h("tr", {}, h("td", { class: "small" }, i.title),
+        h("td", { class: "small" }, i.suggestion ? h("span", {}, i.suggestion.path + " ", h("span", { class: "badge " + (i.suggestion.origin === "ai" ? "warn" : "ok") }, i.suggestion.origin === "ai" ? "AI" : "otomatis")) : h("span", { class: "badge bad" }, "perlu dipilih"),
+          !i.suggestion && apply ? catPicker(mk, id => guard(async () => { await api("/api/product-category", { productId: i.productId, marketplace: mk, categoryId: id }); toast("Kategori disimpan"); })) : null)))))));
+    if (apply) after();
+  });
+  modal("Isi kategori otomatis — " + mk, h("div", {}, h("div", { class: "note" }, "Aplikasi mencocokkan judul + kategori sumber setiap produk dengan DAFTAR KATEGORI RESMI yang sudah Anda impor (Manage Tools → Kategori), termasuk sinonim (baju → atasan/fashion). Yang kurang yakin tidak ditebak. Dengan Gemini: AI hanya boleh memilih dari kandidat daftar itu."),
+    h("div", { class: "row gap" }, h("label", { class: "chk" }, useAi, "Pakai Gemini untuk yang kurang yakin"), h("span", { class: "grow" }), h("button", { onclick: () => run(false) }, "Pratinjau"), h("button", { class: "pri", onclick: () => run(true) }, "Terapkan ke produk yang belum terisi")), out), true);
+}
+
 /* ---------------- Uploader ---------------- */
 const U = { tab: "direct", colId: null };
 async function pgUploader(v, arg) {
@@ -557,7 +586,7 @@ async function pgUploader(v, arg) {
   const suggest = () => guard(async () => { const r = await api("/api/collections/" + U.colId + "/suggest-categories", { marketplace: mkt.value, apply: true }); toast(r.applied + " kategori diisi otomatis (tetap ditinjau di preview)"); drawCats(); });
   const st3 = h("div", { class: "card step" }, h("h3", {}, h("span", {}, "3"), "Target & Kategori"), h("label", {}, "Tujuan", target), U.tab === "export" && h("label", { class: "gap" }, "Template", tpl), h("label", { class: "gap" }, "Marketplace (untuk mapping kategori)", mkt),
     h("div", { class: "small mut gap" }, "Kategori mapping — isi ID dari panduan marketplace (jangan menebak):"), catBox,
-    h("div", { class: "row gap" }, h("button", { class: "sm", onclick: suggest }, "✨ Isi otomatis (butuh daftar kategori)")),
+    h("div", { class: "row gap" }, h("button", { class: "sm pri", onclick: () => autoCatDialog(U.colId, mkt.value, drawCats) }, "✨ Isi kategori otomatis semua produk"), h("button", { class: "sm", onclick: suggest }, "Isi per kategori sumber")),
     h("details", { class: "gap" }, h("summary", {}, "Impor daftar kategori marketplace (CSV id,path)"), catCsv, h("button", { class: "sm", onclick: () => guard(async () => { const r = await api("/api/categories/import", { marketplace: mkt.value, csvText: catCsv.value }); toast("Daftar kategori diimpor"); }) }, "Impor")), h("div", { class: "row gap" }, h("label", {}, "Kategori fallback", h("div", { class: "row" }, fbId, fbLabel))));
   body.append(h("div", { class: "steps" }, st1, st2, st3), h("div", { class: "row gap" }, h("span", { class: "grow" }),
     h("button", { class: "pri", onclick: () => guard(async () => {
@@ -639,7 +668,23 @@ async function pgTools(v) {
       h("h3", { class: "gap" }, "Tambah sumber"), h("div", { class: "row" }, dom, h("div", { class: "grow" }, note), h("button", { class: "pri", onclick: () => guard(async () => { await api("/api/sources", { platform: "web_jsonld", domain: dom.value, permissionNote: note.value }); toast("Domain ditambahkan"); draw(); }) }, "Tambah")));
   };
   const box = h("div", { class: "card" });
-  v.append(h("h2", {}, "Manage Tools — Scrap Plugins"), box); await draw();
+  const catCard = h("div", { class: "card gap" });
+  const drawCat = async () => {
+    const ov = await api("/api/categories/overview");
+    const csv = h("textarea", { style: "min-height:90px", placeholder: "id,path  atau  id<TAB>Level1<TAB>Level2...\n100,Fashion Pria > Atasan > Kaos" }), mk = h("select", {}, ...Object.keys(ov).map(k => h("option", { value: k }, k)));
+    const file = h("input", { type: "file", accept: ".csv,.tsv,.txt" });
+    file.onchange = () => { const f = file.files[0]; if (!f) return; const rd = new FileReader(); rd.onload = () => { csv.value = String(rd.result); toast("File dibaca: " + f.name); }; rd.readAsText(f); };
+    const test = h("input", { placeholder: "uji pencarian: mis. baju koko pria", style: "width:260px" }), testOut = h("div", { class: "small gap" });
+    test.oninput = () => guard(async () => { if (test.value.trim().length < 3) { testOut.replaceChildren(); return; } const r = await api("/api/categories/search?marketplace=" + mk.value + "&q=" + encodeURIComponent(test.value) + "&limit=5"); testOut.replaceChildren(...(r.length ? r.map(x => h("div", {}, x.path + " (" + x.id + ") · skor " + x.score)) : [h("div", { class: "mut" }, "Tidak ada yang cocok / daftar belum diimpor")])); });
+    catCard.replaceChildren(h("h3", {}, "Kategori Marketplace"),
+      h("div", { class: "note" }, "Aplikasi memetakan kategori tiap produk otomatis (kata kunci + sinonim, opsional Gemini) berdasarkan DAFTAR KATEGORI RESMI marketplace. Daftar itu harus Anda impor sekali per marketplace (id + path), dari berkas kategori di template mass-upload Seller Center atau dari API resmi (Shopee: get_category, TikTok Shop: categories). Aplikasi sengaja tidak membawa daftar bawaan karena ID kategori berbeda-beda dan berubah; ID yang salah membuat produk salah kategori."),
+      h("table", { class: "gap" }, h("thead", {}, h("tr", {}, ...["Marketplace", "Kategori terimpor", "Pemetaan otomatis", "AI", "Manual"].map(x => h("th", {}, x)))),
+        h("tbody", {}, ...Object.entries(ov).map(([k, o]) => h("tr", {}, h("td", {}, k), h("td", {}, o.categories ? o.categories : h("span", { class: "badge warn" }, "belum diimpor")), h("td", {}, o.auto), h("td", {}, o.ai), h("td", {}, o.manual))))),
+      h("div", { class: "row gap" }, h("label", {}, "Marketplace", mk), file),
+      csv, h("div", { class: "row gap" }, h("button", { class: "pri", onclick: () => guard(async () => { const r = await api("/api/categories/import", { marketplace: mk.value, csvText: csv.value }); toast(r.imported + " kategori diimpor"); drawCat(); }) }, "Impor / ganti daftar"), test), testOut,
+      h("div", { class: "small mut gap" }, "Setelah impor: Uploader → langkah 3 → \"Isi kategori otomatis semua produk\"."));
+  };
+  v.append(h("h2", {}, "Manage Tools — Scrap Plugins"), box, catCard); await draw(); await drawCat();
 }
 
 /* ---------------- Settings ---------------- */
@@ -684,11 +729,15 @@ async function pgSettings(v) {
   const box = h("div", { class: "card" });
   const draw = async () => {
     const [ai, ov, ex] = await Promise.all([api("/api/ai"), api("/api/overview"), api("/api/exports")]);
+    const keyIn = h("input", { type: "password", placeholder: "Tempel API key Gemini (AIza...)", style: "width:360px", autocomplete: "off" });
     box.replaceChildren(h("h3", {}, "AI Provider (Optimize Title & Deskripsi)"),
       ...ai.providers.map(p => h("div", { class: "proc" + (ai.active === p.name ? " on" : "") }, h("div", { class: "row" }, h("b", {}, p.label), p.ready ? badge("active") : h("span", { class: "badge warn" }, "belum siap"), h("span", { class: "grow" }),
         h("button", { class: "sm" + (ai.active === p.name ? "" : " pri"), disabled: ai.active === p.name, onclick: () => guard(async () => { await api("/api/ai/provider", { name: p.name }); toast("Provider diganti"); draw(); }) }, ai.active === p.name ? "Dipakai" : "Pakai")), h("div", { class: "small mut" }, p.note))),
       h("div", { class: "row gap" }, h("button", { onclick: () => guard(async () => { const r = await api("/api/ai/test", {}); toast(r.ok ? "Tes AI berhasil: " + r.title : "Tes AI gagal: " + (r.errors || []).join(", "), !r.ok); }) }, "Tes provider")),
-      h("div", { class: "note gap" }, "API key Gemini TIDAK diisi di sini. Buat file candra.env di folder aplikasi berisi GEMINI_API_KEY=xxxx lalu jalankan ulang. Kunci tidak pernah disimpan di database atau log."),
+      h("div", { class: "note gap" }, h("div", {}, h("b", {}, "API key Gemini: "), ai.providers.find(p => p.name === "gemini").ready ? "sudah tersimpan di file candra.env di folder aplikasi ✓" : "belum diisi"),
+        h("div", { class: "small mut" }, "Buat kunci gratis di aistudio.google.com/apikey (login akun Google → Create API key → salin). Tempel di bawah. Kunci disimpan HANYA di file candra.env di komputer ini (bukan di database, tidak masuk log, tidak dikirim ke mana pun selain ke Google saat AI dipakai)."),
+        h("div", { class: "row gap" }, keyIn, h("button", { class: "pri", onclick: () => guard(async () => { await api("/api/ai/key", { key: keyIn.value.trim() }); keyIn.value = ""; toast("Kunci disimpan"); draw(); }) }, "Simpan kunci"),
+          h("button", { class: "sm danger", onclick: () => { if (confirm("Hapus kunci Gemini dari candra.env?")) guard(async () => { await api("/api/ai/key", { key: "" }); toast("Kunci dihapus"); draw(); }); } }, "Hapus kunci"))),
       h("h3", { class: "gap" }, "File export"), ex.length ? h("table", {}, ...ex.map(f => h("tr", {}, h("td", {}, f.file), h("td", { class: "small mut" }, f.modified + " · " + f.bytes + " B"), h("td", {}, h("a", { class: "btn", href: "/download/" + encodeURIComponent(f.file), download: f.file }, "Unduh"))))) : h("div", { class: "mut small" }, "Belum ada."),
       h("h3", { class: "gap" }, "Ekstensi Chrome (Capture)"), capCard,
       h("h3", { class: "gap" }, "Pembaruan aplikasi"), upd,

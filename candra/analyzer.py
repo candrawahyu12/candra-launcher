@@ -8,11 +8,13 @@ from typing import Iterable
 
 from .util import normalize_title
 
-PHONE = re.compile(r"(?<![\d])(?:\+62|62|0)8\d(?:[\s.\-]?\d){7,10}(?!\d)")
+PHONE = re.compile(r"(?<![\d])\(?(?:\+62|62|0)[\s.\-]?8\d\)?(?:[\s.\-]?\d){7,10}(?!\d)")
 URL = re.compile(r"(?i)\b(?:https?://|www\.)[^\s<>\"']+|\b(?:wa\.me|shope\.ee|tokopedia\.link|bit\.ly|linktr\.ee)/[^\s<>\"']*")
 EMAIL = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 HANDLE = re.compile(r"(?<![\w@])@[A-Za-z0-9_.]{3,30}")
-CONTACT_LABEL = re.compile(r"(?i)\b(?:wa|whatsapp|bbm|telegram|ig|instagram|id\s*line|line\s*id)\b\s*[:=]\s*\S+")
+_LABELS = r"(?:wa|whatsapp|bbm|telegram|ig|instagram|id\s*line|line\s*id)"
+CONTACT_LABEL = re.compile(r"(?i)\b" + _LABELS + r"\b\s*[:=]\s*(?:\+?\(?\d[\d\s.\-()]{6,}\d|\S+)")
+ORPHAN_LABEL = re.compile(r"(?i)\b" + _LABELS + r"\b\s*[:=]\s*(?=[.!?,;]|\s|$)")
 PROMO_PHRASES = ["follow toko", "follow kami", "chat admin", "chat kami", "hubungi kami", "klik link", "kunjungi toko",
                  "dm kami", "order via wa", "pesan via wa", "add wa", "tanya admin",
                  "order sekarang", "pesan sekarang", "beli sekarang", "hubungi admin", "chat dulu", "silakan chat", "silahkan chat",
@@ -99,8 +101,9 @@ def clean_text(text: str, types: Iterable[str], shop_names: Iterable[str] = ()) 
     if not text or not types:
         return text or "", removed
     shop_rx = _shop_regex(shop_names) if "shop_name" in types else None
-    span_rules = [(k, rx) for k, rx in (("phone", PHONE), ("url", URL), ("email", EMAIL), ("handle", HANDLE),
-                                        ("contact_label", CONTACT_LABEL), ("marketplace", MARKETPLACE)) if k in types]
+    # contact_label dulu: "WA: 0812..." dibuang utuh (label + nomor), baru jenis lain
+    span_rules = [(k, rx) for k, rx in (("contact_label", CONTACT_LABEL), ("phone", PHONE), ("url", URL), ("email", EMAIL), ("handle", HANDLE),
+                                        ("marketplace", MARKETPLACE)) if k in types]
     if shop_rx:
         span_rules.append(("shop_name", shop_rx))
     seen_sentences: set[str] = set()
@@ -121,6 +124,8 @@ def clean_text(text: str, types: Iterable[str], shop_names: Iterable[str] = ()) 
             for m in rx.finditer(body):
                 removed.append({"type": kind, "text": m.group(0)})
             body = rx.sub("", body)
+        if "contact_label" in types:
+            body = ORPHAN_LABEL.sub("", body)  # label tanpa isi ("WA:") sisa dari pembersihan lain
         if "repeated_sentence" in types and len(key.split()) >= 4:
             if key in seen_sentences:
                 removed.append({"type": "repeated_sentence", "text": original_body.strip()})

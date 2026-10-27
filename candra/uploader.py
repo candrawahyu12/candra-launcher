@@ -235,8 +235,13 @@ def build_payload(db: DB, product_id: int, target: str, cfg: dict, index: int = 
         warnings.append("SUPPLIER_DATA:" + ",".join(leaks))
 
     category = None
-    if p["source_category_path"]:
-        mkt = cfg.get("marketplace") or target  # mapping disimpan per marketplace (shopee/tokopedia/tiktok), bukan per konektor
+    mkt = cfg.get("marketplace") or target  # mapping disimpan per marketplace (shopee/tokopedia/tiktok), bukan per konektor
+    pc = db.one("SELECT * FROM product_categories WHERE product_id=? AND marketplace=?", (product_id, mkt))
+    if pc:  # kategori per produk (otomatis/AI/manual) lebih spesifik daripada mapping per kategori sumber
+        category = {"id": pc["category_id"], "label": pc["label"] or ""}
+        if pc["origin"] in ("auto", "ai"):
+            warnings.append("CATEGORY_AUTO_REVIEW")
+    if category is None and p["source_category_path"]:
         m = db.one("SELECT * FROM category_mappings WHERE source_platform=? AND source_category=? AND target_platform=?"
                    " AND enabled=1", (p["source_platform"], p["source_category_path"], mkt))
         if m and m["target_category_id"]:

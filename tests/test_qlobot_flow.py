@@ -626,6 +626,94 @@ class TextAiTests(unittest.TestCase):
             os.environ.pop("GEMINI_API_KEY", None)
 
 
+class CategoryAutoTests(unittest.TestCase):
+    CATS = ("100,Fashion Pria > Atasan > Kaos\n101,Fashion Pria > Bawahan > Celana Panjang\n102,Fashion Wanita > Atasan > Blouse\n"
+            "200,Rumah Tangga > Taman > Semprotan & Sprayer\n300,Elektronik > Handphone > Casing")
+
+    def setUp(self):
+        self.svc = make_svc(connectors={"sandbox": lambda cfg: SandboxConnector()})
+        self.svc.create_scrape_job(source_platform="csv_feed", input_mode="csv", inputs={"csv_text": SAMPLE}, collection_name="K",
+                                   rights_declaration="own"); self.svc.jobs.run_pending()
+        self.col = self.svc.db.one("SELECT id FROM collections")["id"]
+        self.svc.import_categories("shopee", self.CATS)
+
+    def test_synonyms_and_parse_variants(self):
+        from candra import categories as c
+        cand = [{"category_id": a, "path": b} for a, b in c.parse_category_csv(self.CATS)]
+        top = c.suggest(c.build_query("", ["Baju Kaos Polos Pria Katun"]), cand)[0]
+        self.assertEqual(top["id"], "100")                                 # "baju" -> fashion/atasan/kaos
+        top2 = c.suggest(c.build_query("", ["Sprayer Semprotan Tanaman 2L"]), cand)[0]
+        self.assertEqual(top2["id"], "200")
+        self.assertEqual(c.parse_category_csv("id\tL1\tL2\n9\tA\tB")[0], ("9", "A > B"))   # tab + banyak kolom
+        self.assertEqual(c.parse_category_csv("id;path\n7;X / Y")[0], ("7", "X > Y"))
+
+    def test_auto_map_per_product_preview_apply_and_payload(self):
+        pv = self.svc.auto_map_categories(self.col, "shopee")
+        self.assertFalse(pv["applied"] > 0)
+        self.assertEqual(self.svc.db.one("SELECT COUNT(*) n FROM product_categories")["n"], 0)      # pratinjau tidak menyimpan
+        r = self.svc.auto_map_categories(self.col, "shopee", apply=True)
+        self.assertEqual(r["applied"], r["summary"]["auto"] + r["summary"]["ai"])
+        again = self.svc.auto_map_categories(self.col, "shopee", apply=True)
+        self.assertEqual(again["applied"], 0)                                                        # sudah terisi tidak ditimpa
+        celana = self.svc.db.one("SELECT id FROM products WHERE title_original LIKE 'Celana%'")["id"]
+        row = self.svc.db.one("SELECT category_id, origin FROM product_categories WHERE product_id=?", (celana,))
+        if row:
+            self.assertEqual(row["category_id"], "101")
+            pvu = self.svc.preview_upload(collection_id=self.col, target="sandbox", selection={"mode": "all"}, config={"marketplace": "shopee"})
+            item = next(i for i in pvu["items"] if i["productId"] == celana) if "items" in pvu else None
+            if item is not None:
+                self.assertNotIn("CATEGORY_UNMAPPED", item["errors"])                              # kategori per produk dipakai upload
+                self.assertIn("CATEGORY_AUTO_REVIEW", item["warnings"])                            # hasil otomatis tetap bertanda tinjau
+        with self.assertRaises(ServiceError):
+            self.svc.set_product_category(celana, "shopee", "999999")                                # ID di luar daftar ditolak
+        self.svc.set_product_category(celana, "shopee", "101")
+        self.assertEqual(self.svc.db.one("SELECT origin FROM product_categories WHERE product_id=?", (celana,))["origin"], "manual")
+        with self.assertRaises(ServiceError):
+            self.svc.auto_map_categories(self.col, "tiktok")                                         # daftar belum diimpor
+
+    def test_ai_may_only_pick_from_shortlist(self):
+        os.environ["GEMINI_API_KEY"] = "dummy"
+        try:
+            ids = [p["id"] for p in self.svc.db.query("SELECT id FROM products ORDER BY id")]
+            self.svc.import_categories("shopee", "500,Otomotif > Aksesoris Mobil\n501,Hobi > Koleksi")
+            calls = []
+
+            def transport(url, headers, body):
+                calls.append(1)
+                prompt = body["contents"][0]["parts"][0]["text"]
+                data = json.loads(prompt.split("DATA_JSON: ", 1)[1])
+                picks = [{"product": data[0]["product"], "id": "100"}]           # id yang TIDAK ada di kandidat produk -> harus ditolak
+                if len(data) > 1:
+                    picks.append({"product": data[1]["product"], "id": data[1]["kandidat"][0]["id"]})   # valid
+                return {"candidates": [{"content": {"parts": [{"text": json.dumps(picks)}]}}]}
+            self.svc.providers["gemini"].transport = transport
+            r = self.svc.auto_map_categories(self.col, "shopee", use_ai=True)
+            self.assertTrue(calls)
+            for it in r["items"]:
+                sg = it.get("suggestion")
+                if sg and sg["origin"] == "ai":
+                    self.assertIn(sg["id"], ("500", "501"))                      # hanya dari daftar yang diimpor
+            self.assertFalse(any((it.get("suggestion") or {}).get("id") == "100" and it["suggestion"]["origin"] == "ai" for it in r["items"]))
+        finally:
+            os.environ.pop("GEMINI_API_KEY", None)
+
+
+class EnvKeyTests(unittest.TestCase):
+    def test_write_env_value_keeps_other_lines_and_removes(self):
+        import sys, tempfile
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+        import server
+        d = tempfile.mkdtemp(); path = os.path.join(d, "candra.env")
+        open(path, "w").write("# komentar\nCANDRA_GEMINI_MODEL=gemini-flash-latest\nGEMINI_API_KEY=lama\n")
+        server.write_env_value(path, "GEMINI_API_KEY", "AIzaSyBARU_1234567890abcdef")
+        txt = open(path).read()
+        self.assertIn("# komentar", txt); self.assertIn("CANDRA_GEMINI_MODEL=gemini-flash-latest", txt)
+        self.assertEqual(txt.count("GEMINI_API_KEY="), 1); self.assertIn("AIzaSyBARU_1234567890abcdef", txt)
+        server.write_env_value(path, "GEMINI_API_KEY", None)
+        self.assertNotIn("GEMINI_API_KEY", open(path).read()); self.assertIn("# komentar", open(path).read())
+        self.assertTrue(server.KEY_RE.match("AIzaSyBARU_1234567890abcdef")); self.assertFalse(server.KEY_RE.match("a b; rm -rf"))
+
+
 class CaptureTests(unittest.TestCase):
     def setUp(self):
         self.svc = make_svc()

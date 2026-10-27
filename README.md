@@ -60,3 +60,11 @@ bisa berubah; bila data tidak lengkap, klik ikon ekstensi → "Unduh diagnostik 
 - **Harga & Kompetitor**: tombol "Terapkan harga rekomendasi" (harga per varian setelah semua biaya marketplace; bisa dikembalikan ke aturan harga). Status "Rugi" kini menunjuk harga yang sedang dipakai, dan berubah setelah harga rekomendasi diterapkan.
 - **Gemini 404**: bila model tidak ditemukan, aplikasi mencoba model hasil deteksi + beberapa alias, dan pesan galat menyebut semua model yang dicoba.
 - Migrasi DB v6 (`price_overrides`).
+
+## v0.10.0 — Kategori otomatis, Manage Tools → Kategori, kunci Gemini dari Settings
+- **Kategori per produk, otomatis**: "baju/kaos/kemeja…" → jalur kategori resmi (mis. Fashion Pria > Atasan > Kaos). Urutan: kata kunci + sinonim dari daftar kategori resmi yang Anda impor → (opsional) Gemini memilih HANYA dari daftar kandidat → jika tidak ada yang cocok, produk ditandai "perlu tinjau"; aplikasi tidak pernah menebak ID kategori. Bisa diubah manual per produk (Uploader langkah 3).
+- **Manage Tools → Kategori Marketplace**: impor daftar kategori resmi per marketplace (CSV/TSV/titik-koma; kolom ID + jalur), cari kategori, lihat ringkasan pemetaan. Daftar resmi tidak dibundel karena ID bisa berubah — unduh dari Seller Center lalu impor sekali.
+- **Settings → API key Gemini**: simpan kunci ke `candra.env` (tidak pernah ke database/log); tombol Tes provider.
+- Migrasi DB v7 (`product_categories`).
+- Perbaikan hasil uji acak (fuzz): normalisasi data capture non-list, solve_price Decimal/float, nomor telepon & label "WA:" yatim.
+- Uji: 93 tes unit + fuzz 20.000 iterasi × 3 seed; suite penuh diulang ratusan kali dengan PYTHONHASHSEED berbeda.

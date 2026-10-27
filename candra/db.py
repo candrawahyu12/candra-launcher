@@ -258,6 +258,19 @@ MIGRATIONS = [
         PRIMARY KEY(product_id, variant_id, marketplace)
     );
     """,
+    # ---- v7: kategori per produk (otomatis/AI/manual) ----
+    """
+    CREATE TABLE product_categories(
+        product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+        marketplace TEXT NOT NULL,
+        category_id TEXT NOT NULL,
+        label TEXT,
+        origin TEXT NOT NULL,
+        confidence REAL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(product_id, marketplace)
+    );
+    """,
 ]
 
 
