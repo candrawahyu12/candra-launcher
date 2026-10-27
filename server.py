@@ -133,7 +133,12 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
                     self.end_headers()
                     self.wfile.write(data)
                     return
+                if m := re.fullmatch(r"/api/fill/image/(\d+)/(\d+)", u.path):
+                    data, ctype = svc.fill_image(self.headers.get("X-Candra-Token"), int(m[1]), int(m[2]))
+                    return self._send(200, data, ctype)
                 self._send(200, self.route_get(u.path, q))
+            except PermissionError as e:
+                self._send(401, {"error": redact(e)})
             except USER_ERRORS as e:
                 self._send(400, {"error": redact(e)})
             except Exception as e:  # noqa: BLE001
@@ -175,6 +180,12 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
                 return svc.list_competitors(int(m[1]))
             if path == "/api/capture/rules":
                 return svc.capture_rules(self.headers.get("X-Candra-Token"))
+            if path == "/api/fill/rules":
+                return svc.fill_rules(self.headers.get("X-Candra-Token"))
+            if path == "/api/fill/queue":
+                return svc.fill_queue(self.headers.get("X-Candra-Token"))
+            if m := re.fullmatch(r"/api/fill/item/(\d+)", path):
+                return svc.fill_item(self.headers.get("X-Candra-Token"), int(m[1]))
             if path == "/api/capture/token":
                 return {"token": svc.capture_token}
             if path == "/api/storage":
@@ -289,6 +300,8 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
                 return svc.confirm_competitor(int(m[1]), b.get("label", ""))
             if m := re.fullmatch(r"/api/collections/(\d+)/stock", path):
                 return svc.bulk_stock(int(m[1]), b.get("productIds"), b.get("op", ""), b.get("value"), bool(b.get("apply")), actor="ui")
+            if m := re.fullmatch(r"/api/fill/item/(\d+)/done", path):
+                return svc.fill_done(self.headers.get("X-Candra-Token"), int(m[1]), str(b.get("state", "")), str(b.get("note", "")))
             if path == "/api/capture":
                 return svc.capture_products(b.get("items"), self.headers.get("X-Candra-Token"))
             if path == "/api/validate-urls":

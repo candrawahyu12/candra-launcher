@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "note": "Aturan pengisi form. Diperbarui lewat pembaruan aplikasi; ekstensi tidak perlu dipasang ulang. Kata kunci dicocokkan ke label/placeholder/teks di dekat kolom.",
+  "fields": {
+    "title":       {"keywords": ["nama produk", "product name", "judul produk", "product title"], "kinds": ["input", "textarea"]},
+    "description": {"keywords": ["deskripsi produk", "deskripsi", "product description", "description"], "kinds": ["textarea", "contenteditable", "input"]},
+    "price":       {"keywords": ["harga", "price"], "kinds": ["input"], "numeric": true},
+    "stock":       {"keywords": ["stok", "stock", "kuantitas", "quantity"], "kinds": ["input"], "numeric": true},
+    "weight":      {"keywords": ["berat", "weight"], "kinds": ["input"], "numeric": true},
+    "sku":         {"keywords": ["sku", "kode produk", "seller sku"], "kinds": ["input"]}
+  },
+  "image_input_hint": ["image", "foto", "gambar", "photo", "upload"],
+  "max_images": 9,
+  "manual_steps": [
+    "Pilih kategori sesuai jalur yang ditampilkan (tombol Salin).",
+    "Merek: pilih 'Tanpa Merek' / No Brand.",
+    "COD / Bayar di Tempat: matikan.",
+    "Varian: isi dari tabel varian di panel (tombol Salin per sel).",
+    "Periksa semua kolom, selesaikan CAPTCHA/verifikasi bila diminta, lalu tekan Kirim sendiri."
+  ],
+  "min_score": 2
+}

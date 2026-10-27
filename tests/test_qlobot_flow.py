@@ -777,3 +777,89 @@ class CaptureTests(unittest.TestCase):
             self.svc.capture_products([self.DETAIL] * 61, self.tok)
         with self.assertRaises(ServiceError):
             self.svc.capture_products([], self.tok)
+
+
+class AssistedFillTests(unittest.TestCase):
+    """Isi form semi-otomatis: antrean untuk ekstensi, Anda yang kirim; tidak ada pengiriman otomatis."""
+    def setUp(self):
+        self.svc = make_svc(image_fetch=lambda u: _jpeg(900, 900), ocr_runner=lambda path: "Kaos polos")
+        self.tok = self.svc.capture_token
+        self.svc.create_scrape_job(source_platform="csv_feed", input_mode="csv", inputs={"csv_text": SAMPLE},
+                                   collection_name="K", rights_declaration="supplier_permitted")
+        self.svc.jobs.run_pending()
+        self.col = self.svc.db.one("SELECT id FROM collections")["id"]
+        for cat in ("Fashion Pria", "Tas Pria"):
+            self.svc.set_category_mapping("csv_feed", cat, "shopee", "100", cat)
+
+    def _confirmed(self, process=True):
+        if process:
+            self.svc.process_images(self.col, "shopee")
+        pv = self.svc.preview_upload(collection_id=self.col, target="assisted", selection={"mode": "all"}, config={"marketplace": "shopee"})
+        if pv["valid"]:
+            self.svc.confirm_upload(pv["batchId"], idempotency_key="k-assist-0001", preview_hash=pv["previewHash"])
+            self.svc.uploads.run_pending()
+        return pv
+
+    def test_requires_marketplace_and_processed_images(self):
+        with self.assertRaises(Exception):
+            self.svc.preview_upload(collection_id=self.col, target="assisted", selection={"mode": "all"}, config={})
+        pv = self._confirmed(process=False)
+        self.assertEqual(pv["valid"], 0)
+        self.assertIn("IMAGES_NOT_PROCESSED", pv["errorsByCode"])
+
+    def test_queue_item_image_done_flow(self):
+        pv = self._confirmed()
+        self.assertGreater(pv["valid"], 0)
+        b = self.svc.db.one("SELECT * FROM upload_batches WHERE id=?", (pv["batchId"],))
+        self.assertEqual(b["status"], "AWAITING_FILL")                       # tidak ada yang terkirim otomatis
+        q = self.svc.fill_queue(self.tok)["items"]
+        self.assertEqual(len(q), pv["valid"])
+        it = self.svc.fill_item(self.tok, q[0]["itemId"])
+        self.assertNotIn("processed_images", it)                             # path lokal tidak bocor ke halaman
+        self.assertGreater(it["imageCount"], 0)
+        data, ctype = self.svc.fill_image(self.tok, q[0]["itemId"], 0)
+        self.assertTrue(data[:2] == b"\xff\xd8" and ctype == "image/jpeg")
+        with self.assertRaises(ServiceError):
+            self.svc.fill_image(self.tok, q[0]["itemId"], 99)
+        for x in q:
+            r = self.svc.fill_done(self.tok, x["itemId"], "done")
+            self.assertTrue(r["ok"])
+        again = self.svc.fill_done(self.tok, q[0]["itemId"], "done")         # idempoten
+        self.assertTrue(again["idempotentReplay"])
+        self.assertEqual(self.svc.db.one("SELECT status FROM upload_batches WHERE id=?", (pv["batchId"],))["status"], "SUCCEEDED")
+        self.assertEqual(self.svc.fill_queue(self.tok)["items"], [])
+
+    def test_skip_marks_partial_and_cancel(self):
+        pv = self._confirmed()
+        q = self.svc.fill_queue(self.tok)["items"]
+        self.assertGreaterEqual(len(q), 1)
+        bid = pv["batchId"]
+        if len(q) == 1:
+            self.svc.fill_done(self.tok, q[0]["itemId"], "skipped")
+            self.assertEqual(self.svc.db.one("SELECT status FROM upload_batches WHERE id=?", (bid,))["status"], "FAILED")
+        else:
+            self.svc.fill_done(self.tok, q[0]["itemId"], "done")
+            self.svc.fill_done(self.tok, q[1]["itemId"], "skipped")
+            self.svc.uploads.cancel(bid)
+            self.assertEqual(self.svc.fill_queue(self.tok)["items"], [])
+            self.assertEqual(self.svc.db.one("SELECT status FROM upload_batches WHERE id=?", (bid,))["status"], "CANCELLED")
+
+    def test_token_required_and_path_confined(self):
+        pv = self._confirmed()
+        for fn in (lambda: self.svc.fill_queue("salah"), lambda: self.svc.fill_rules(None), lambda: self.svc.fill_item("x", 1),
+                   lambda: self.svc.fill_image("x", 1, 0), lambda: self.svc.fill_done("x", 1, "done")):
+            with self.assertRaises(PermissionError):
+                fn()
+        q = self.svc.fill_queue(self.tok)["items"][0]["itemId"]
+        row = self.svc.db.one("SELECT payload_json FROM upload_items WHERE id=?", (q,))
+        pl = json.loads(row["payload_json"]); pl["processed_images"] = ["/etc/passwd"]
+        self.svc.db.execute("UPDATE upload_items SET payload_json=? WHERE id=?", (json.dumps(pl), q))
+        with self.assertRaises(ServiceError):
+            self.svc.fill_image(self.tok, q, 0)                              # di luar folder foto CANDRA ditolak
+        with self.assertRaises(ServiceError):
+            self.svc.fill_done(self.tok, q, "bogus")
+
+    def test_rules_file_valid(self):
+        r = self.svc.fill_rules(self.tok)
+        for k in ("title", "description", "price", "stock", "weight", "sku"):
+            self.assertTrue(r["fields"][k]["keywords"])

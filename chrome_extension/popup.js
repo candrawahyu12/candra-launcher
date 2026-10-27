@@ -14,3 +14,28 @@ $("diag").onclick = async () => {
     a.download = "candra-diagnostik.json"; a.click(); say("Berkas diagnostik diunduh (tanpa token/cookie).");
   });
 };
+
+const SELLER_OK = /(^|\.)(shopee|tokopedia|tiktok|tiktokshop|tiktokglobalshop)[a-z.\-]*$/i;
+async function activeOrigin() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const u = new URL(tab.url || "about:blank");
+  if (u.protocol !== "https:" || !SELLER_OK.test(u.hostname)) throw new Error("Buka dulu halaman Seller Center Shopee/Tokopedia/TikTok (https).");
+  return { tab, u, pattern: u.origin + "/*", id: "candra-fill-" + u.hostname };
+}
+$("fillOn").onclick = async () => {
+  try {
+    const { tab, u, pattern, id } = await activeOrigin();
+    if (!(await chrome.permissions.request({ origins: [pattern] }))) return say("Izin ditolak.", true);
+    try { await chrome.scripting.registerContentScripts([{ id, matches: [pattern], js: ["fill.js"], runAt: "document_idle" }]); } catch (_) { /* sudah terdaftar */ }
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["fill.js"] });
+    say("Aktif di " + u.hostname + ". Panel 'CANDRA · Isi Form' ada di kanan bawah halaman.");
+  } catch (e) { say(String(e.message || e), true); }
+};
+$("fillOff").onclick = async () => {
+  try {
+    const { pattern, id } = await activeOrigin();
+    try { await chrome.scripting.unregisterContentScripts({ ids: [id] }); } catch (_) {}
+    await chrome.permissions.remove({ origins: [pattern] });
+    say("Dimatikan. Muat ulang halaman.");
+  } catch (e) { say(String(e.message || e), true); }
+};

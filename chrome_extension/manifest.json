@@ -1,17 +1,39 @@
 {
   "manifest_version": 3,
   "name": "CANDRA Capture",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Kirim data produk yang tampil di halaman yang Anda buka sendiri ke aplikasi CANDRA di komputer Anda.",
-  "permissions": ["storage", "activeTab"],
-  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
-  "background": { "service_worker": "background.js" },
-  "action": { "default_popup": "popup.html", "default_title": "CANDRA Capture" },
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "CANDRA Capture"
+  },
   "content_scripts": [
     {
-      "matches": ["https://shopee.co.id/*", "https://*.shopee.co.id/*", "https://www.tokopedia.com/*", "https://*.tokopedia.com/*"],
-      "js": ["content.js"],
+      "matches": [
+        "https://shopee.co.id/*",
+        "https://*.shopee.co.id/*",
+        "https://www.tokopedia.com/*",
+        "https://*.tokopedia.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_idle"
     }
+  ],
+  "optional_host_permissions": [
+    "https://*/*"
   ]
 }

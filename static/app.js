@@ -565,10 +565,10 @@ async function pgUploader(v, arg) {
   const dmin = h("input", { type: "number", min: 0, value: 20, style: "width:70px" }), dmax = h("input", { type: "number", min: 0, value: 40, style: "width:70px" });
   const pause = h("input", { type: "number", min: 0, max: 50, value: 3, style: "width:70px" });
   const st2 = h("div", { class: "card step" }, h("h3", {}, h("span", {}, "2"), "Upload Data"), h("label", {}, "Produk yang diproses", mode), h("div", { class: "row gap" }, h("label", {}, "Dari", from), h("label", {}, "Sampai", to)),
-    U.tab === "direct" && h("div", {}, h("div", { class: "row gap" }, h("label", {}, "Jeda min (detik)", dmin), h("label", {}, "Jeda maks (detik)", dmax)), h("label", { class: "gap" }, "Pause proses ketika N kali gagal berturut-turut", pause),
+    U.tab === "direct" && h("div", {}, h("div", { class: "small mut" }, "Mode 'Isi form': produk dikirim ke antrean ekstensi, tidak ada jeda/pengiriman otomatis. Foto wajib sudah diolah (Bulk Editor → Gambar)."), h("div", { class: "row gap" }, h("label", {}, "Jeda min (detik)", dmin), h("label", {}, "Jeda maks (detik)", dmax)), h("label", { class: "gap" }, "Pause proses ketika N kali gagal berturut-turut", pause),
       h("div", { class: "small mut gap" }, "Jeda acak antar produk untuk mematuhi batas laju API, bukan untuk menghindari deteksi.")));
   // langkah 3
-  const target = h("select", {}, ...(U.tab === "direct" ? [["sandbox", "Sandbox (uji coba, tidak ke marketplace)"], ["shopee_api", "Shopee Open Platform API (butuh konektor resmi)"], ["tiktok_api", "TikTok Shop API (butuh konektor resmi)"]] : [["export_csv", "File CSV mass-upload"]]).map(([k, l]) => h("option", { value: k }, l)));
+  const target = h("select", {}, ...(U.tab === "direct" ? [["assisted", "Isi form Seller Center lewat ekstensi (Anda yang kirim) — banyak kategori OK"], ["sandbox", "Sandbox (uji coba, tidak ke marketplace)"], ["shopee_api", "Shopee Open Platform API (butuh konektor resmi)"], ["tiktok_api", "TikTok Shop API (butuh konektor resmi)"]] : [["export_csv", "File CSV mass-upload"]]).map(([k, l]) => h("option", { value: k }, l)));
   const tpl = h("select", {}); api("/api/templates").then(t => t.forEach(x => tpl.append(h("option", { value: x.id }, x.name))));
   const mkt = h("select", {}, ...[["shopee", "Shopee"], ["tokopedia", "Tokopedia"], ["tiktok", "TikTok Shop"], ["sandbox", "Sandbox"]].map(([k, l]) => h("option", { value: k }, l)));
   target.onchange = () => { if (target.value === "shopee_api") mkt.value = "shopee"; else if (target.value === "tiktok_api") mkt.value = "tiktok"; else if (target.value === "sandbox") mkt.value = "sandbox"; drawCats(); };
@@ -643,7 +643,8 @@ async function pgMonitor(v, arg) {
       const c = r.counts || {}, n = Object.values(c).reduce((a, b) => a + b, 0);
       head.replaceChildren(h("div", { class: "row" }, h("h3", { style: "margin:0" }, "Uploading #" + M.sel.id + " · " + n + " Target - " + (c.SUCCEEDED || 0) + " Success - " + ((c.FAILED || 0) + (c.UNCERTAIN || 0)) + " Failed"), badge(r.status)));
       actions.replaceChildren(
-        ["QUEUED", "PROCESSING"].includes(r.status) && h("button", { class: "danger", onclick: () => guard(() => api("/api/batches/" + M.sel.id + "/cancel", {})) }, "Batalkan"),
+        r.status === "AWAITING_FILL" && h("span", { class: "badge warn" }, "Menunggu Anda: buka Seller Center → panel CANDRA · Isi Form → kirim sendiri"),
+        ["QUEUED", "PROCESSING", "AWAITING_FILL"].includes(r.status) && h("button", { class: "danger", onclick: () => guard(() => api("/api/batches/" + M.sel.id + "/cancel", {})) }, "Batalkan"),
         ["PAUSED", "PARTIAL_FAILED", "FAILED"].includes(r.status) && h("button", { onclick: () => guard(async () => { await api("/api/batches/" + M.sel.id + "/retry-failed", {}); await api("/api/batches/" + M.sel.id + "/resume", {}); toast("Diulang"); }) }, "Ulangi yang gagal / lanjutkan"),
         r.exportFile && r.exportFile.file && h("a", { class: "btn", href: "/download/" + encodeURIComponent(r.exportFile.file), download: r.exportFile.file }, "⬇ Unduh CSV (" + (r.exportFile.file) + ")"));
     }

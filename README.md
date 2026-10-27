@@ -68,3 +68,10 @@ bisa berubah; bila data tidak lengkap, klik ikon ekstensi → "Unduh diagnostik 
 - Migrasi DB v7 (`product_categories`).
 - Perbaikan hasil uji acak (fuzz): normalisasi data capture non-list, solve_price Decimal/float, nomor telepon & label "WA:" yatim.
 - Uji: 93 tes unit + fuzz 20.000 iterasi × 3 seed; suite penuh diulang ratusan kali dengan PYTHONHASHSEED berbeda.
+
+## v0.11.0 — Isi Form Seller Center (semi-otomatis, banyak kategori)
+- Uploader → tab Direct → tujuan **"Isi form Seller Center lewat ekstensi"** → preview → konfirmasi. Produk masuk antrean (status *AWAITING_FILL*); tidak ada yang dikirim otomatis. Tiap produk memakai kategorinya sendiri, jadi satu batch boleh campur kategori.
+- Anda login & menyelesaikan CAPTCHA/verifikasi sendiri di Chrome biasa (bukan mode penyamaran; ekstensi tidak aktif di sana secara bawaan). CANDRA tidak pernah melihat/menyimpan password atau cookie.
+- Di halaman "Tambah Produk" Seller Center: ikon ekstensi → **Aktifkan Isi Form di situs ini** → panel *CANDRA · Isi Form* di kanan bawah → pilih produk → kolom nama, deskripsi, harga, stok, berat, SKU dan foto terisi. Kategori, merek (Tanpa Merek), COD (nonaktif) dan varian diisi manual dengan bantuan tombol Salin. Anda menekan Kirim sendiri, lalu klik **Sudah saya kirim ✓** (status di Process Monitor ikut berubah).
+- Aturan pengenal kolom ada di `candra/fill_rules.json` (ikut pembaruan aplikasi). Tombol *Diagnostik kolom* menyalin daftar kolom (tanpa isinya) bila ada yang tidak terisi.
+- Ekstensi v0.2.0: muat ulang di chrome://extensions.

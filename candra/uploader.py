@@ -110,6 +110,19 @@ class SandboxConnector(TargetConnector):
         return l["id"] if l else None
 
 
+class AssistedFillConnector(TargetConnector):
+    """Isi form semi-otomatis: TIDAK mengirim apa pun sendiri. Item menunggu di antrean (AWAITING_FILL); ekstensi Chrome mengisi form
+    Seller Center di sesi login ANDA, dan ANDA yang menekan kirim lalu menandai 'sudah dikirim'. Tidak menyimpan password/cookie."""
+    name = "assisted"
+    assisted = True
+
+    def submit(self, item_key: str, payload: dict) -> SubmitResult:  # tidak pernah dipanggil
+        return SubmitResult("needs_human", None, "ASSISTED", "diisi manual lewat ekstensi")
+
+    def lookup(self, item_key: str) -> Optional[str]:
+        return None
+
+
 class OfficialApiConnector(TargetConnector):
     """Placeholder konektor API resmi (Shopee Open Platform / TikTok Shop Partner Center).
     Belum dikonfigurasi: butuh akses developer/seller yang disetujui, token via secure storage, dan implementasi
@@ -201,7 +214,9 @@ def _validate_config(cfg: dict, target: str) -> dict:
     if not isinstance(ra, list) or len(ra) > 20 or any(not isinstance(x, str) or not 1 <= len(x) <= 40 for x in ra):
         raise UploadError("required_attributes harus daftar nama atribut (maks 20)")
     out["required_attributes"] = ra
-    out["require_processed_images"] = bool(out.get("require_processed_images", False))
+    out["require_processed_images"] = bool(out.get("require_processed_images", False)) or target == "assisted"
+    if target == "assisted" and not out.get("marketplace"):
+        raise UploadError("target 'assisted' wajib menyebut marketplace (shopee/tokopedia/tiktok)")
     return out
 
 
@@ -478,6 +493,10 @@ class UploadManager:
             self.db.execute("UPDATE upload_items SET status='CANCELLED', updated_at=? WHERE batch_id=? AND status IN"
                             " ('READY','RETRY_PENDING')", (now(), batch_id))
             self._set(batch_id, "CANCELLED", finished_at=now())
+        elif b["status"] == "AWAITING_FILL":
+            self.db.execute("UPDATE upload_items SET status='CANCELLED', updated_at=? WHERE batch_id=? AND status IN"
+                            " ('AWAITING_FILL','FILLING')", (now(), batch_id))
+            self._set(batch_id, "CANCELLED", finished_at=now())
         elif b["status"] == "PROCESSING":
             self.db.execute("UPDATE upload_batches SET cancel_requested=1 WHERE id=?", (batch_id,))
         else:
@@ -537,6 +556,13 @@ class UploadManager:
         pause_after = int(cfg.get("pause_after_failures", 0) or 0)
         todo = self.db.query("SELECT * FROM upload_items WHERE batch_id=? AND status IN ('READY','UNCERTAIN','RETRY_PENDING')"
                              " ORDER BY id", (batch_id,))
+        if getattr(connector, "assisted", False):  # tidak ada pengiriman otomatis: antrekan untuk ekstensi, tunggu tindakan Anda
+            self.db.execute("UPDATE upload_items SET status='AWAITING_FILL', updated_at=? WHERE batch_id=? AND status IN"
+                            " ('READY','UNCERTAIN','RETRY_PENDING')", (now(), batch_id))
+            self._set(batch_id, "AWAITING_FILL")
+            self.db.event("upload", batch_id, "info", "AWAITING_FILL",
+                          f"{len(todo)} produk menunggu diisi lewat ekstensi di Seller Center (Anda yang menekan kirim)")
+            return
         self.db.event("upload", batch_id, "info", "BATCH_STARTED", f"Memulai Products Uploader: {len(todo)} produk, konektor {connector.name}")
         paused, pause_reason, consecutive = False, "NEEDS_HUMAN_ACTION", 0
         for it in todo:

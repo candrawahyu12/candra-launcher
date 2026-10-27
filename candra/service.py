@@ -19,7 +19,7 @@ from .exporter import export_csv, list_templates
 from .jobs import RIGHTS, JobError, JobManager, parse_url_lines
 from .optimizer import AIProvider, GeminiProvider, gemini_search, RuleBasedProvider, optimize_product, validate_ai_output
 from .pricing import PriceRule, PricingError, compute_price, simulate
-from .uploader import (ExportFileConnector, OfficialApiConnector, SandboxConnector, UploadError, UploadManager,
+from .uploader import (AssistedFillConnector, ExportFileConnector, OfficialApiConnector, SandboxConnector, UploadError, UploadManager,
                        build_payload, _validate_config)
 from . import images as imgmod
 from . import capture as capmod
@@ -59,6 +59,7 @@ class CandraService:
         self.started_at = now()
         conns = {
             "export_csv": lambda cfg: ExportFileConnector(cfg.get("template", "generic"), self.export_dir),
+            "assisted": lambda cfg: AssistedFillConnector(),
             "sandbox": lambda cfg, _inst=SandboxConnector(): _inst,
             "shopee_api": lambda cfg: OfficialApiConnector("shopee_api"),
             "tiktok_api": lambda cfg: OfficialApiConnector("tiktok_api"),
@@ -931,6 +932,90 @@ class CandraService:
         if not capmod.token_ok(self.capture_token, token):
             raise PermissionError("token ekstensi salah")
         return capmod.load_rules()
+
+    # ------------------------------------------------------------ isi form semi-otomatis (ekstensi)
+    def _fill_auth(self, token: Optional[str]) -> None:
+        if not capmod.token_ok(self.capture_token, token):
+            raise PermissionError("token ekstensi salah")
+
+    def fill_rules(self, token: Optional[str]) -> dict:
+        self._fill_auth(token)
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "fill_rules.json"), encoding="utf-8") as f:
+            return json.load(f)
+
+    def fill_queue(self, token: Optional[str]) -> dict:
+        """Antrean produk yang sudah Anda preview & konfirmasi, menunggu diisi di Seller Center."""
+        self._fill_auth(token)
+        rows = self.db.query(
+            "SELECT i.id, i.batch_id, i.status, i.payload_json, b.config_json FROM upload_items i JOIN upload_batches b ON b.id=i.batch_id"
+            " WHERE b.target_platform='assisted' AND b.status='AWAITING_FILL' AND i.status IN ('AWAITING_FILL','FILLING') ORDER BY i.id")
+        items = []
+        for r in rows:
+            pl, cfg = json.loads(r["payload_json"]), json.loads(r["config_json"])
+            prices = [v["price"] for v in pl["variants"] if v.get("price") is not None]
+            items.append({"itemId": r["id"], "batchId": r["batch_id"], "marketplace": cfg.get("marketplace"), "title": pl["title"],
+                          "sku": pl["sku_parent"], "category": (pl.get("category") or {}).get("label", ""),
+                          "variants": len(pl["variants"]), "priceMin": min(prices) if prices else None,
+                          "priceMax": max(prices) if prices else None, "images": len(pl.get("processed_images") or []),
+                          "status": r["status"]})
+        return {"items": items}
+
+    def _fill_item_row(self, item_id: int) -> dict:
+        r = self.db.one("SELECT i.*, b.status bstatus, b.target_platform tp FROM upload_items i JOIN upload_batches b ON b.id=i.batch_id"
+                        " WHERE i.id=?", (item_id,))
+        if not r or r["tp"] != "assisted":
+            raise ServiceError("item tidak ditemukan")
+        return r
+
+    def fill_item(self, token: Optional[str], item_id: int) -> dict:
+        self._fill_auth(token)
+        r = self._fill_item_row(item_id)
+        if r["status"] not in ("AWAITING_FILL", "FILLING"):
+            raise ServiceError(f"item berstatus {r['status']}; tidak bisa diisi")
+        raw = json.loads(r["payload_json"])
+        pl = {k: v for k, v in raw.items() if k != "processed_images"}  # path lokal tidak diberikan ke halaman
+        pl["imageCount"] = len(raw.get("processed_images") or [])
+        pl["itemId"] = item_id
+        pl["marketplace"] = json.loads(self.db.one("SELECT config_json FROM upload_batches WHERE id=?", (r["batch_id"],))["config_json"]).get("marketplace")
+        self.db.execute("UPDATE upload_items SET status='FILLING', updated_at=? WHERE id=? AND status='AWAITING_FILL'", (now(), item_id))
+        return pl
+
+    def fill_image(self, token: Optional[str], item_id: int, index: int) -> tuple[bytes, str]:
+        self._fill_auth(token)
+        r = self._fill_item_row(item_id)
+        paths = json.loads(r["payload_json"]).get("processed_images") or []
+        if not 0 <= index < len(paths):
+            raise ServiceError("foto tidak ada")
+        real = os.path.realpath(paths[index])
+        root = os.path.realpath(self.image_dir) + os.sep
+        if not real.startswith(root) or not os.path.isfile(real):  # hanya berkas di folder foto CANDRA
+            raise ServiceError("foto tidak tersedia")
+        with open(real, "rb") as f:
+            data = f.read()
+        ext = real.rsplit(".", 1)[-1].lower()
+        return data, {"png": "image/png", "webp": "image/webp"}.get(ext, "image/jpeg")
+
+    def fill_done(self, token: Optional[str], item_id: int, state: str, note: str = "") -> dict:
+        """Anda menandai hasilnya: 'done' (sudah Anda kirim di Seller Center), 'skipped' (dilewati), 'failed'. Idempoten."""
+        self._fill_auth(token)
+        r = self._fill_item_row(item_id)
+        if state not in ("done", "skipped", "failed"):
+            raise ServiceError("state harus done/skipped/failed")
+        if r["status"] in ("SUCCEEDED", "FAILED", "CANCELLED"):
+            return {"ok": True, "status": r["status"], "idempotentReplay": True}
+        if r["status"] not in ("AWAITING_FILL", "FILLING"):
+            raise ServiceError(f"item berstatus {r['status']}")
+        new = {"done": "SUCCEEDED", "skipped": "FAILED", "failed": "FAILED"}[state]
+        code = {"done": "ASSISTED_DONE", "skipped": "SKIPPED_BY_USER", "failed": "ASSISTED_FAILED"}[state]
+        self.uploads._item_update(item_id, new, target_id="manual" if state == "done" else None, code=code, msg=(note or "")[:200] or None)
+        self.db.event("upload", r["batch_id"], "info" if state == "done" else "warning", "ITEM_" + code,
+                      f"{json.loads(r['payload_json']).get('sku_parent', '?')} - {state}")
+        left = self.db.one("SELECT COUNT(*) n FROM upload_items WHERE batch_id=? AND status IN ('AWAITING_FILL','FILLING')", (r["batch_id"],))["n"]
+        if left == 0:
+            items = self.db.query("SELECT status FROM upload_items WHERE batch_id=? AND status!='SKIPPED_INVALID'", (r["batch_id"],))
+            ok = sum(1 for i in items if i["status"] == "SUCCEEDED")
+            self.uploads._set(r["batch_id"], "SUCCEEDED" if ok == len(items) else ("PARTIAL_FAILED" if ok else "FAILED"), finished_at=now())
+        return {"ok": True, "status": new, "remaining": left}
 
     # ------------------------------------------------------------ penyimpanan: laporan, pembersihan, batas
     DEFAULT_STORAGE_LIMIT_MB = 2048
