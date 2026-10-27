@@ -70,24 +70,84 @@ class GeminiProvider(AIProvider):
     def key_configured() -> bool:
         return bool(os.environ.get("GEMINI_API_KEY", "").strip())
 
-    def _http(self, url: str, headers: dict, body: dict) -> dict:
-        req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers=headers, method="POST")
+    LIST_URL = "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200"
+
+    def _http(self, url: str, headers: dict, body: Optional[dict]) -> dict:
+        data = None if body is None else json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(url, data=data, headers=headers, method="GET" if body is None else "POST")
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as r:
                 return json.loads(r.read(2_000_000).decode("utf-8"))
         except urllib.error.HTTPError as e:
-            raise ValueError(f"AI_HTTP_{e.code}") from None
+            detail = ""
+            try:
+                detail = str((json.loads(e.read(4000).decode("utf-8", "replace")).get("error") or {}).get("message", ""))[:160]
+            except Exception:  # noqa: BLE001
+                pass
+            key = os.environ.get("GEMINI_API_KEY", "").strip()
+            if key:
+                detail = detail.replace(key, "***")
+            raise ValueError(f"AI_HTTP_{e.code}" + (f": {detail}" if detail else "")) from None
         except (urllib.error.URLError, TimeoutError, OSError):
             raise ValueError("AI_NETWORK_ERROR") from None
 
-    def complete(self, prompt: str) -> str:
+    @staticmethod
+    def _pick_model(listing: dict) -> Optional[str]:
+        """Pilih model flash stabil terbaru yang mendukung generateContent dari ListModels."""
+        best, best_v = None, (-1.0,)
+        for m in (listing or {}).get("models", []):
+            name = str(m.get("name", "")).replace("models/", "")
+            if "generateContent" not in (m.get("supportedGenerationMethods") or []):
+                continue
+            if "flash" not in name or any(x in name for x in ("preview", "exp", "image", "tts", "live", "lite", "audio", "thinking", "8b")):
+                continue
+            mm = re.search(r"gemini-(\d+(?:\.\d+)?)", name)
+            v = (float(mm.group(1)) if mm else 0.0,)
+            if v > best_v:
+                best, best_v = name, v
+        return best
+
+    FALLBACK_MODELS = ("gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash")
+
+    def _call(self, body: dict) -> dict:
+        """POST generateContent. Bila model tidak ditemukan (404): coba model yang terdeteksi dari ListModels untuk kunci ini,
+        lalu beberapa alias umum. Model yang berhasil diingat selama aplikasi berjalan. Pesan galat menyebut semua model yang dicoba."""
         key = os.environ.get("GEMINI_API_KEY", "").strip()
         if not key:
             raise ValueError("GEMINI_API_KEY belum diatur di environment")
-        data = self.transport(self.ENDPOINT.format(model=self.model),
-                              {"Content-Type": "application/json", "x-goog-api-key": key},
-                              {"contents": [{"parts": [{"text": prompt}]}],
-                               "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"}})
+        headers = {"Content-Type": "application/json", "x-goog-api-key": key}
+        tried: list[str] = []
+
+        def attempt(model: str) -> dict:
+            tried.append(model)
+            return self.transport(self.ENDPOINT.format(model=model), headers, body)
+
+        try:
+            return attempt(self.model)
+        except ValueError as e:
+            if not str(e).startswith("AI_HTTP_404"):
+                raise
+        try:
+            discovered = self._pick_model(self.transport(self.LIST_URL, {"x-goog-api-key": key}, None))
+        except ValueError:
+            discovered = None
+        for m in ([discovered] if discovered else []) + list(self.FALLBACK_MODELS):
+            if m in tried:
+                continue
+            try:
+                out = attempt(m)
+            except ValueError as e:
+                if str(e).startswith("AI_HTTP_404"):
+                    continue
+                raise
+            self.model = m
+            return out
+        raise ValueError("AI_HTTP_404 - tidak ada model Gemini yang bisa dipakai untuk kunci ini (dicoba: " + ", ".join(tried) +
+                         "). Periksa kunci API di aistudio.google.com, atau isi CANDRA_GEMINI_MODEL di candra.env")
+
+    def complete(self, prompt: str) -> str:
+        data = self._call({"contents": [{"parts": [{"text": prompt}]}],
+                           "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"}})
         try:
             return data["candidates"][0]["content"]["parts"][0]["text"]
         except (KeyError, IndexError, TypeError):
@@ -96,13 +156,8 @@ class GeminiProvider(AIProvider):
 
 def gemini_search(provider: "GeminiProvider", prompt: str) -> tuple[str, list[str]]:
     """Panggil Gemini dengan Google Search grounding. Return (teks, judul/domain sumber)."""
-    key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if not key:
-        raise ValueError("GEMINI_API_KEY belum diatur di environment")
-    data = provider.transport(provider.ENDPOINT.format(model=provider.model),
-                              {"Content-Type": "application/json", "x-goog-api-key": key},
-                              {"contents": [{"parts": [{"text": prompt}]}], "tools": [{"google_search": {}}],
-                               "generationConfig": {"temperature": 0.1}})
+    data = provider._call({"contents": [{"parts": [{"text": prompt}]}], "tools": [{"google_search": {}}],
+                           "generationConfig": {"temperature": 0.1}})
     try:
         cand = data["candidates"][0]
         text = "".join(p.get("text", "") for p in cand["content"]["parts"])

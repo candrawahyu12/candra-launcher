@@ -51,3 +51,12 @@ bisa berubah; bila data tidak lengkap, klik ikon ekstensi → "Unduh diagnostik 
 - Settings → **Penyimpanan**: rincian ruang (foto olahan, export, database, lainnya), batas ruang (default 2048 MB) dan tombol **Bersihkan foto olahan**.
 - Yang dihapus hanya foto olahan yang aman: produknya sudah sukses diupload ke marketplace itu, dikecualikan, gagal/terlalu kecil, atau berkas yatim. Foto yang menunggu tinjauan/upload tidak pernah dihapus; foto asli di sumber tidak tersentuh. Selalu ada pratinjau dan konfirmasi.
 - Bila folder data melewati batas (dicek saat aplikasi mulai dan setelah olah gambar), aplikasi menghapus hanya yang aman (foto tak terpakai, export > 30 hari, log besar) dan memberi peringatan bila masih lewat batas.
+
+## v0.9.0
+- **Ekstensi Chrome**: tombol "Kirim ke CANDRA" kini satu tombol mengambang yang muncul saat kursor di atas kartu produk; tidak lagi menyisipkan elemen ke dalam kartu Shopee (penyebab gambar putih). Setelah memperbarui, buka chrome://extensions → ikon muat ulang di CANDRA Capture, lalu F5 di Shopee.
+- **AI Optimize**: usulan judul/deskripsi per produk; Anda mencentang yang dipakai. Server memvalidasi ulang (angka/fakta tidak boleh berubah, tanpa kontak).
+- **Bulk Editor → Reset judul marketplace (Gemini + Google Search)**: judul dengan kata kunci yang sering dicari pembeli, per produk/kategori; bisa diedit sebelum diterapkan.
+- **Analisis & Bersihkan → Bersihkan semua identitas & ajakan**: nomor, link, akun, nama toko, dan frasa ajakan (order sekarang, chat kami, follow, dst.) dibuang dari judul & deskripsi; teks asli tetap tersimpan.
+- **Harga & Kompetitor**: tombol "Terapkan harga rekomendasi" (harga per varian setelah semua biaya marketplace; bisa dikembalikan ke aturan harga). Status "Rugi" kini menunjuk harga yang sedang dipakai, dan berubah setelah harga rekomendasi diterapkan.
+- **Gemini 404**: bila model tidak ditemukan, aplikasi mencoba model hasil deteksi + beberapa alias, dan pesan galat menyebut semua model yang dicoba.
+- Migrasi DB v6 (`price_overrides`).

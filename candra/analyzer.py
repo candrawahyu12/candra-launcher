@@ -14,7 +14,9 @@ EMAIL = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 HANDLE = re.compile(r"(?<![\w@])@[A-Za-z0-9_.]{3,30}")
 CONTACT_LABEL = re.compile(r"(?i)\b(?:wa|whatsapp|bbm|telegram|ig|instagram|id\s*line|line\s*id)\b\s*[:=]\s*\S+")
 PROMO_PHRASES = ["follow toko", "follow kami", "chat admin", "chat kami", "hubungi kami", "klik link", "kunjungi toko",
-                 "dm kami", "order via wa", "pesan via wa", "add wa", "tanya admin"]
+                 "dm kami", "order via wa", "pesan via wa", "add wa", "tanya admin",
+                 "order sekarang", "pesan sekarang", "beli sekarang", "hubungi admin", "chat dulu", "silakan chat", "silahkan chat",
+                 "tanyakan stok", "follow dulu", "kunjungi toko kami", "klik keranjang", "tinggalkan ulasan", "beri bintang 5", "jangan ragu chat"]
 PROMO = re.compile("(?i)(?:" + "|".join(re.escape(p) for p in PROMO_PHRASES) + ")")
 
 _SPEC_UNIT = r"(?:cm|mm|kg|gr|gram|ml|liter|watt|mah|gb|tb|inch|pcs|pack|volt|hz)"

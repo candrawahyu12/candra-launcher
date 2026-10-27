@@ -17,7 +17,7 @@ from . import categories as cats
 from .db import DB
 from .exporter import export_csv, list_templates
 from .jobs import RIGHTS, JobError, JobManager, parse_url_lines
-from .optimizer import AIProvider, GeminiProvider, gemini_search, RuleBasedProvider, optimize_product
+from .optimizer import AIProvider, GeminiProvider, gemini_search, RuleBasedProvider, optimize_product, validate_ai_output
 from .pricing import PriceRule, PricingError, compute_price, simulate
 from .uploader import (ExportFileConnector, OfficialApiConnector, SandboxConnector, UploadError, UploadManager,
                        build_payload, _validate_config)
@@ -347,7 +347,8 @@ class CandraService:
         for p in self._products_in(collection_id, product_ids)[:200]:
             t, d = self._eff(p)
             r = optimize_product(self.provider, t, d, target=target, max_title=max_title, shop_names=shop_names or [])
-            entry = {"id": p["id"], "applied": False, "errors": r["errors"], "before": {"title": t}, "after": {"title": r["title"]}}
+            entry = {"id": p["id"], "applied": False, "errors": r["errors"], "before": {"title": t, "description": d},
+                     "after": {"title": r["title"], "description": r["description"]}}
             if apply and r["applied"]:
                 if r["title"] != t:
                     self.db.execute("UPDATE products SET title_edited=? WHERE id=?", (r["title"], p["id"]))
@@ -358,6 +359,75 @@ class CandraService:
                 entry["applied"] = True
             out.append(entry)
         return {"provider": self.provider.name, "applyRequested": apply, "results": out}
+
+    # ------------------------------------------------------------ teks: terapkan usulan terpilih & reset judul marketplace
+    def apply_text_suggestions(self, collection_id: int, items: list, shop_names: Optional[list[str]] = None, max_title: int = 100,
+                               source: str = "ai-selected", actor: str = "local") -> dict:
+        """Terapkan usulan judul/deskripsi yang DIPILIH pengguna. Selalu divalidasi ulang di server (fakta/angka tidak boleh berubah,
+        tanpa kontak/link/nama toko); yang gagal dilewati. Teks asli tetap tersimpan, perubahan tercatat."""
+        valid_ids = {p["id"]: p for p in self._products_in(collection_id)}
+        applied, rejected = [], []
+        for it in (items or [])[:300]:
+            try:
+                pid = int(it.get("id"))
+            except (TypeError, ValueError, AttributeError):
+                continue
+            p = valid_ids.get(pid)
+            if not p:
+                rejected.append({"id": pid, "errors": ["BUKAN_PRODUK_COLLECTION_INI"]})
+                continue
+            t, d = self._eff(p)
+            nt = str(it.get("title") if it.get("title") is not None else t)
+            nd = str(it.get("description") if it.get("description") is not None else d)
+            errs = validate_ai_output(t, d, {"title": nt.strip(), "description": nd}, max_title=max_title, shop_names=shop_names or [])
+            if errs:
+                rejected.append({"id": pid, "errors": errs})
+                continue
+            if nt.strip() != t:
+                self.db.execute("UPDATE products SET title_edited=? WHERE id=?", (nt.strip(), pid))
+                self._record_edit(pid, "title", t, nt.strip(), source, actor)
+            if nd != d:
+                self.db.execute("UPDATE products SET description_edited=? WHERE id=?", (nd, pid))
+                self._record_edit(pid, "description", d, nd, source, actor)
+            applied.append(pid)
+        return {"applied": len(applied), "appliedIds": applied, "rejected": rejected}
+
+    def suggest_marketplace_titles(self, collection_id: int, marketplace: str, product_ids: Optional[list[int]] = None,
+                                   shop_names: Optional[list[str]] = None, limit: int = 20) -> dict:
+        """Gemini + Google Search: judul dengan kata kunci yang sering dicari pembeli, per produk (kategori berbeda dicari terpisah).
+        Hanya USULAN: tidak mengubah apa pun sebelum Anda memilih dan menerapkan."""
+        if marketplace not in research.TITLE_LIMITS:
+            raise ServiceError(f"marketplace harus salah satu dari {tuple(research.TITLE_LIMITS)}")
+        if not GeminiProvider.key_configured():
+            raise ServiceError("GEMINI_API_KEY belum diatur (candra.env).")
+        g = self.providers["gemini"]
+        maxt = research.TITLE_LIMITS[marketplace]
+        prods = self._products_in(collection_id, product_ids)[:max(1, min(limit, 40))]
+        results, sources, failed = [], [], []
+        for i in range(0, len(prods), 5):  # 5 produk per panggilan agar pencarian tetap spesifik per produk
+            chunk = prods[i:i + 5]
+            items = [{"id": p["id"], "title": self._eff(p)[0], "category": p["source_category_path"]} for p in chunk]
+            try:
+                text, srcs = gemini_search(g, research.title_prompt(marketplace, items, maxt))
+            except ValueError as e:
+                failed.append({"error": str(e), "ids": [p["id"] for p in chunk]})
+                continue
+            sources += [x for x in srcs if x]
+            got = research.parse_titles(text)
+            for p in chunk:
+                t, d = self._eff(p)
+                s_ = got.get(p["id"])
+                if not s_:
+                    failed.append({"error": "TIDAK_ADA_USULAN", "ids": [p["id"]]})
+                    continue
+                errs = validate_ai_output(t, d, {"title": s_["title"], "description": d}, max_title=maxt, shop_names=shop_names or [])
+                results.append({"id": p["id"], "before": t, "after": s_["title"], "keywords": s_["keywords"], "errors": errs})
+        return {"marketplace": marketplace, "maxTitle": maxt, "results": results, "failed": failed[:20], "sources": sorted(set(sources))[:10],
+                "warning": "Usulan AI dari hasil pencarian web; belum tentu paling laku. Anda yang memutuskan memakainya."}
+
+    def clean_all_text(self, collection_id: int, product_ids: Optional[list[int]] = None, shop_names: Optional[list[str]] = None) -> dict:
+        """Bersihkan SEMUA jenis identitas toko/kontak/ajakan di judul & deskripsi sekaligus (aturan deterministik, ada pengaman fakta)."""
+        return self.clean_products(collection_id, list(CLEANABLE), product_ids, shop_names)
 
     # ------------------------------------------------------------ harga & mapping
     def price_simulation(self, collection_id: int, rule: dict, limit: int = 20) -> dict:
@@ -1029,12 +1099,13 @@ class CandraService:
         return feemod.DEFAULT_PROFILES[marketplace] | {"customized": False}
 
     def set_fee_profile(self, marketplace: str, components: list, overrides: Optional[list] = None, verified: bool = False,
-                        source: str = "") -> dict:
+                        source: str = "", ai_researched: bool = False) -> dict:
         base = self.get_fee_profile(marketplace)
         try:
             prof = {"label": base["label"], "components": feemod.validate_components(components),
                     "overrides": feemod.validate_overrides(overrides if overrides is not None else base.get("overrides")),
-                    "status": "VERIFIED_BY_USER" if verified else "DRAFT_UNVERIFIED", "source": (source or base.get("source", ""))[:500]}
+                    "status": "VERIFIED_BY_USER" if verified else ("AI_RESEARCHED" if ai_researched else "DRAFT_UNVERIFIED"),
+                    "source": (source or base.get("source", ""))[:500], "updatedAt": now()}
         except feemod.FeeError as e:
             raise ServiceError(str(e))
         self._set_setting("fees:" + marketplace, json.dumps(prof, ensure_ascii=False))
@@ -1117,6 +1188,7 @@ class CandraService:
             comps = [{"name": "Komisi", "kind": "percent", "value": fee, "cap": None, "dynamic": False, "enabled": True},
                      {"name": "Biaya tetap", "kind": "fixed", "value": fixed, "cap": None, "dynamic": False, "enabled": True}]
             ovs, fee_status = [], "MANUAL"
+        rule_set = bool(cfg.get("price_rule")) and (rule.mode in ("tiers", "margin") or rule.percent > 0 or rule.fixed > 0 or rule.extra_fixed > 0)
         rows = []
         for p in self._products_in(collection_id, product_ids)[:500]:
             title = self._eff(p)[0]
@@ -1125,8 +1197,11 @@ class CandraService:
                 rows.append({"id": p["id"], "title": title[:70], "verdict": "MODAL_TIDAK_ADA"})
                 continue
             cat = f"{p['source_category_path'] or ''} {title}"
+            ov = self.db.one("SELECT po.price, po.marketplace FROM price_overrides po LEFT JOIN product_variants v ON v.id=po.variant_id"
+                             " WHERE po.product_id=? AND (po.variant_id=0 OR v.price_original=?) ORDER BY po.updated_at DESC LIMIT 1", (p["id"], cost))
+            price_source = "rekomendasi" if ov else ("aturan" if rule_set else None)
             try:
-                now_price = compute_price(cost, rule)
+                now_price = int(ov["price"]) if ov else (compute_price(cost, rule) if rule_set else None)
             except PricingError:
                 now_price = None
             try:
@@ -1143,7 +1218,7 @@ class CandraService:
             if now_price is not None and now_price < even:
                 verdict = "RUGI"
             elif not comps_p:
-                verdict = "TANPA_PEMBANDING"
+                verdict = "TANPA_PEMBANDING" if now_price is not None else "HARGA_BELUM_DIATUR"
             elif floor > cmin:
                 verdict = "TIDAK_BISA_BERSAING" if even > cmin else "MARGIN_TIPIS_JIKA_SAMAI"
             elif now_price is not None and now_price > med * 1.05:
@@ -1156,15 +1231,76 @@ class CandraService:
             else:
                 suggested = floor
             at_floor = feemod.net_profit(floor, cost, comps, ovs, cat, extra_cost)
-            rows.append({"id": p["id"], "title": title[:70], "cost": cost, "priceNow": now_price, "floorForMargin": floor,
+            rows.append({"id": p["id"], "title": title[:70], "cost": cost, "priceNow": now_price, "priceSource": price_source, "floorForMargin": floor,
                          "breakEven": even, "compMin": cmin, "compMedian": med, "compCount": len(comps_p), "aiHidden": 0 if use_ai_prices else ai_n,
                          "verdict": verdict, "suggested": suggested, "atFloor": at_floor,
                          "nowBreakdown": feemod.net_profit(now_price, cost, comps, ovs, cat, extra_cost) if now_price else None})
         summary: dict[str, int] = {}
         for r in rows:
             summary[r["verdict"]] = summary.get(r["verdict"], 0) + 1
-        return {"marketplace": marketplace, "feeStatus": fee_status, "targetMarginPct": margin, "extraCost": extra_cost,
+        return {"marketplace": marketplace, "feeStatus": fee_status, "ruleSet": rule_set, "targetMarginPct": margin, "extraCost": extra_cost,
                 "feeSet": any(c["value"] for c in comps if c["enabled"]), "summary": summary, "items": rows}
+
+    def apply_recommended_prices(self, collection_id: int, marketplace: str, target_margin_pct: float = 10.0, extra_cost: float = 0.0,
+                                 use_ai_prices: bool = False, product_ids: Optional[list[int]] = None, round_step: int = 100,
+                                 apply: bool = False) -> dict:
+        """Hitung harga jual per varian = harga terkecil yang memberi laba sesuai target SETELAH semua biaya platform marketplace itu
+        (bila ada harga pembanding: tidak di bawah batas itu, mendekati median pembanding). apply=True menyimpannya sebagai harga yang
+        dipakai upload/export untuk varian itu (menggantikan aturan harga). Selalu bisa dikembalikan lewat clear_price_overrides."""
+        if marketplace not in feemod.DEFAULT_PROFILES:
+            raise ServiceError("marketplace tidak dikenal")
+        margin = float(target_margin_pct)
+        if not 0 <= margin < 80 or extra_cost < 0:
+            raise ServiceError("margin/biaya tambahan tidak valid")
+        prof = self.get_fee_profile(marketplace)
+        comps, ovs = prof["components"], prof.get("overrides") or []
+        changes, skipped = [], 0
+        for p in self._products_in(collection_id, product_ids)[:500]:
+            title = self._eff(p)[0]
+            vs = self.db.query("SELECT id, price_original FROM product_variants WHERE product_id=? ORDER BY id", (p["id"],)) or \
+                [{"id": 0, "price_original": p["price_original"]}]
+            costs = [v["price_original"] for v in vs if v["price_original"]]
+            if not costs:
+                skipped += 1
+                continue
+            cmax = max(costs)
+            cat = f"{p['source_category_path'] or ''} {title}"
+            comp_rows = self.list_competitors(p["id"])
+            cp = [c["price"] for c in comp_rows if use_ai_prices or not c["label"].startswith(self.AI_PREFIX)]
+            med = sorted(cp)[len(cp) // 2] if cp else None
+            for v in vs:
+                c = v["price_original"]
+                if not c:
+                    continue
+                try:
+                    floor = feemod.solve_price(c, comps, ovs, cat, margin, extra_cost, round_step)
+                except feemod.FeeError:
+                    skipped += 1
+                    continue
+                price = floor if med is None else max(floor, int(-(-(med * c / cmax) // round_step) * round_step))
+                changes.append({"productId": p["id"], "variantId": v["id"] or 0, "cost": c, "price": int(price), "floor": floor})
+        if apply:
+            ts = now()
+            with self.db.tx() as conn:
+                for ch in changes:
+                    conn.execute("INSERT INTO price_overrides(product_id, variant_id, marketplace, price, source, updated_at) VALUES(?,?,?,?,?,?)"
+                                 " ON CONFLICT(product_id, variant_id, marketplace) DO UPDATE SET price=excluded.price, source=excluded.source,"
+                                 " updated_at=excluded.updated_at", (ch["productId"], ch["variantId"], marketplace, ch["price"], f"margin{margin:g}", ts))
+            self.db.event("system", collection_id, "info", "PRICES_APPLIED", f"{marketplace}: {len(changes)} harga rekomendasi diterapkan (margin {margin:g}%)")
+        return {"applied": apply, "marketplace": marketplace, "count": len(changes), "skipped": skipped, "feeStatus": prof["status"],
+                "samples": changes[:20]}
+
+    def clear_price_overrides(self, collection_id: int, marketplace: Optional[str] = None) -> dict:
+        ids = [p["id"] for p in self._products_in(collection_id)]
+        n = 0
+        for i in range(0, len(ids), 400):
+            chunk = ids[i:i + 400]
+            q = "DELETE FROM price_overrides WHERE product_id IN (%s)" % ",".join("?" * len(chunk))
+            params: list = list(chunk)
+            if marketplace:
+                q += " AND marketplace=?"; params.append(marketplace)
+            n += self.db.execute(q, params).rowcount
+        return {"cleared": n}
 
     # ------------------------------------------------------------ edit stok masal (nilai asli tidak diubah)
     STOCK_OPS = ("set", "add", "subtract", "cap", "floor", "reset")

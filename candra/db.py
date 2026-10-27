@@ -246,6 +246,18 @@ MIGRATIONS = [
     """
     ALTER TABLE product_variants ADD COLUMN image_url TEXT;
     """,
+    # ---- v6: harga rekomendasi yang diterapkan (menggantikan aturan harga untuk produk/varian itu) ----
+    """
+    CREATE TABLE price_overrides(
+        product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+        variant_id INTEGER NOT NULL DEFAULT 0,
+        marketplace TEXT NOT NULL,
+        price INTEGER NOT NULL,
+        source TEXT,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(product_id, variant_id, marketplace)
+    );
+    """,
 ]
 
 

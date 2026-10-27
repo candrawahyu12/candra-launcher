@@ -269,23 +269,63 @@ function bulkDialog(id, after) {
       h("table", {}, ...r.samples.slice(0, 15).map(s => h("tr", {}, h("td", { class: "mut small" }, s.titleBefore), h("td", {}, "→"), h("td", {}, s.titleAfter)))));
     if (apply) { toast(r.changed + " produk diedit"); after(); }
   });
+  const mk = h("select", {}, ...[["shopee", "Shopee"], ["tokopedia", "Tokopedia"], ["tiktok", "TikTok Shop"]].map(([k, l]) => h("option", { value: k }, l)));
+  const lim = h("input", { type: "number", min: 1, max: 40, value: 10, style: "width:70px" });
+  const tOut = h("div", { class: "gap" });
+  const resetTitles = () => guard(async () => {
+    tOut.replaceChildren(h("div", { class: "mut" }, "Gemini mencari kata kunci yang sering dicari pembeli…"));
+    let r;
+    try { r = await api("/api/collections/" + id + "/suggest-titles", { marketplace: mk.value, limit: +lim.value || 10 }); } catch (e) { tOut.replaceChildren(); throw e; }
+    const w = r.results.map(x => ({ x, cb: h("input", { type: "checkbox", checked: !x.errors.length, disabled: !!x.errors.length }), inp: h("input", { value: x.after, style: "width:100%" }) }));
+    const apply = () => guard(async () => {
+      const items = w.filter(z => z.cb.checked && z.inp.value.trim()).map(z => ({ id: z.x.id, title: z.inp.value.trim() }));
+      if (!items.length) { toast("Belum ada yang dicentang", true); return; }
+      const res = await api("/api/collections/" + id + "/apply-text", { items, maxTitle: r.maxTitle, source: "ai-marketplace-title:" + mk.value });
+      toast(res.applied + " judul diperbarui" + (res.rejected.length ? ", " + res.rejected.length + " ditolak validasi" : ""), res.rejected.length > 0);
+      closeModal(); after();
+    });
+    tOut.replaceChildren(h("div", { class: "note" }, r.warning + " Batas judul " + r.maxTitle + " karakter. Anda bisa mengedit usulan sebelum diterapkan." + (r.sources.length ? " Sumber: " + r.sources.slice(0, 4).join(", ") : "")),
+      r.failed.length ? h("div", { class: "small mut" }, r.failed.length + " produk tidak mendapat usulan (" + r.failed[0].error + ")") : null,
+      h("div", { style: "overflow:auto;max-height:340px" }, h("table", {}, h("tbody", {}, ...w.map(z => h("tr", {}, h("td", {}, z.cb), h("td", { class: "small mut", style: "width:35%" }, z.x.before), h("td", {}, z.inp, z.x.keywords && z.x.keywords.length ? h("div", { class: "small mut" }, "kata kunci: " + z.x.keywords.join(", ")) : null, z.x.errors.length ? h("span", { class: "badge bad" }, z.x.errors[0]) : null)))))),
+      h("div", { class: "row gap" }, h("span", { class: "grow" }), h("button", { class: "pri", onclick: apply }, "Terapkan judul yang dicentang")));
+  });
   modal("Bulk Editor — edit masal judul & deskripsi", h("div", {}, rows, h("div", { class: "row" }, h("button", { class: "sm", onclick: add }, "+ Operasi")), out,
-    h("div", { class: "row gap" }, h("span", { class: "grow" }), h("button", { onclick: () => run(false) }, "Pratinjau"), h("button", { class: "pri", onclick: () => run(true) }, "Terapkan"))), true);
+    h("div", { class: "row gap" }, h("span", { class: "grow" }), h("button", { onclick: () => run(false) }, "Pratinjau"), h("button", { class: "pri", onclick: () => run(true) }, "Terapkan")),
+    h("hr", {}), h("div", { class: "small mut" }, "Atau minta Gemini mencarikan judul yang sering dicari pembeli sesuai produk dan kategorinya masing-masing (perlu GEMINI_API_KEY). Usulan saja: tidak ada yang berubah sebelum Anda mencentang dan menerapkan."),
+    h("div", { class: "row gap" }, h("label", {}, "Marketplace", mk), h("label", {}, "Jumlah produk (maks 40)", lim), h("button", { onclick: resetTitles }, "🔎 Reset judul marketplace (Gemini)")), tOut), true);
 }
 
 /* ---------- AI Optimize ---------- */
 function aiDialog(id, after) {
   const out = h("div", {}), shop = h("input", { placeholder: "Nama toko supplier (pisahkan koma) untuk dibuang", style: "width:100%" });
-  const run = apply => guard(async () => {
-    out.replaceChildren(h("div", { class: "mut" }, "Memproses…"));
-    const r = await api("/api/collections/" + id + "/optimize", { apply, shopNames: shop.value.split(",").map(x => x.trim()).filter(Boolean) });
-    const ok = r.results.filter(x => !x.errors.length);
-    out.replaceChildren(h("div", { class: "note" }, "Provider: " + r.provider + " · " + ok.length + "/" + r.results.length + " lolos validasi (angka/ukuran/fakta tidak boleh berubah)" + (apply ? " · diterapkan" : " · pratinjau")),
-      h("table", {}, ...r.results.slice(0, 40).map(x => h("tr", {}, h("td", { class: "small mut" }, x.before.title), h("td", {}, "→"), h("td", {}, x.after.title), h("td", {}, x.errors.length ? h("span", { class: "badge bad" }, x.errors[0]) : x.applied ? h("span", { class: "badge ok" }, "ok") : null)))));
-    if (apply) after();
+  const names = () => shop.value.split(",").map(x => x.trim()).filter(Boolean);
+  const short = (t, n) => (t || "").length > n ? t.slice(0, n) + "…" : (t || "");
+  const run = () => guard(async () => {
+    out.replaceChildren(h("div", { class: "mut" }, "Memproses… (Gemini bisa butuh beberapa menit untuk banyak produk)"));
+    let r;
+    try { r = await api("/api/collections/" + id + "/optimize", { apply: false, shopNames: names() }); } catch (e) { out.replaceChildren(); throw e; }
+    const rows = r.results.map(x => {
+      const bad = !!x.errors.length;
+      return { x, bad, t: h("input", { type: "checkbox", checked: !bad && x.after.title !== x.before.title, disabled: bad || x.after.title === x.before.title }),
+               d: h("input", { type: "checkbox", checked: !bad && x.after.description !== x.before.description, disabled: bad || x.after.description === x.before.description }) };
+    });
+    const setAll = v => rows.forEach(w => { if (!w.t.disabled) w.t.checked = v; if (!w.d.disabled) w.d.checked = v; });
+    const apply = () => guard(async () => {
+      const items = rows.filter(w => w.t.checked || w.d.checked).map(w => ({ id: w.x.id, title: w.t.checked ? w.x.after.title : undefined, description: w.d.checked ? w.x.after.description : undefined }));
+      if (!items.length) { toast("Belum ada yang dicentang", true); return; }
+      const res = await api("/api/collections/" + id + "/apply-text", { items, shopNames: names(), source: "ai-optimize:" + r.provider });
+      toast(res.applied + " produk diperbarui" + (res.rejected.length ? ", " + res.rejected.length + " ditolak validasi" : ""), res.rejected.length > 0);
+      closeModal(); after();
+    });
+    out.replaceChildren(h("div", { class: "note" }, "Provider: " + r.provider + " · " + rows.filter(w => !w.bad).length + "/" + rows.length + " lolos validasi (angka/ukuran/fakta tidak boleh berubah). Anda yang memutuskan: centang judul/deskripsi yang mau dipakai; yang tidak dicentang tetap seperti sekarang."),
+      h("div", { class: "row gap" }, h("button", { class: "sm", onclick: () => setAll(true) }, "Centang semua yang lolos"), h("button", { class: "sm", onclick: () => setAll(false) }, "Kosongkan"), h("span", { class: "grow" }), h("button", { class: "pri", onclick: apply }, "Terapkan yang dicentang")),
+      h("div", { style: "overflow:auto;max-height:460px" }, h("table", {}, h("thead", {}, h("tr", {}, ...["Pakai", "Sekarang", "Usulan AI"].map(x => h("th", {}, x)))),
+        h("tbody", {}, ...rows.slice(0, 60).map(w => h("tr", {}, h("td", {}, h("label", { class: "chk" }, w.t, "judul"), h("label", { class: "chk" }, w.d, "deskripsi")),
+          h("td", { class: "small" }, h("div", { class: "mut" }, w.x.before.title), h("div", { class: "mut" }, short(w.x.before.description, 140))),
+          h("td", { class: "small" }, w.bad ? h("span", { class: "badge bad" }, w.x.errors[0]) : null, h("div", {}, w.x.after.title), h("div", {}, short(w.x.after.description, 220)))))))));
   });
-  modal("AI Optimize Title & Deskripsi", h("div", {}, h("div", { class: "small mut" }, "Provider diatur di Settings. Hasil AI divalidasi deterministik; yang gagal validasi tidak diterapkan."), h("div", { class: "gap" }), shop,
-    h("div", { class: "row gap" }, h("button", { onclick: () => run(false) }, "Pratinjau"), h("button", { class: "pri", onclick: () => run(true) }, "Terapkan yang lolos")), h("div", { class: "gap" }), out), true);
+  modal("AI Optimize Title & Deskripsi", h("div", {}, h("div", { class: "small mut" }, "Provider diatur di Settings (Gemini atau aturan offline). Hasil divalidasi deterministik; tidak ada yang berubah sampai Anda menekan 'Terapkan yang dicentang'."), h("div", { class: "gap" }), shop,
+    h("div", { class: "row gap" }, h("button", { class: "pri", onclick: run }, "Buat usulan")), h("div", { class: "gap" }), out), true);
 }
 
 /* ---------- Analisis & bersihkan ---------- */
@@ -303,7 +343,7 @@ function analyzeDialog(id, after) {
         h("div", { class: "small mut gap" }, "Tanpa gambar: " + (pr.noImage || []).length + " · tanpa kategori: " + (pr.noCategory || []).length + " · harga tidak valid: " + (pr.invalidPrice || []).length + " · stok 0: " + (pr.zeroStock || []).length + " · hak belum diverifikasi: " + (pr.rightsUnverified || []).length),
         checks.length ? h("div", { class: "row gap" }, h("button", { class: "pri", onclick: () => guard(async () => { const c = await api("/api/collections/" + id + "/clean", { types: checks.filter(([, el]) => el.checked).map(([k]) => k), shopNames: shop.value.split(",").map(x => x.trim()).filter(Boolean) }); toast(c.changed + " produk dibersihkan" + (c.skipped.length ? ", " + c.skipped.length + " dilewati (spesifikasi terlindungi)" : "")); after(); scan(); }) }, "Bersihkan yang dicentang")) : h("div", { class: "mut gap" }, "Tidak ada yang perlu dibersihkan."));
     };
-    modal("Analisis & Bersihkan Data", h("div", {}, shop, h("div", { class: "row gap" }, h("button", { onclick: () => guard(scan) }, "Pindai ulang")), h("div", { class: "gap" }), out), true);
+    modal("Analisis & Bersihkan Data", h("div", {}, shop, h("div", { class: "row gap" }, h("button", { onclick: () => guard(scan) }, "Pindai ulang"), h("button", { class: "pri", onclick: () => { if (confirm("Hapus SEMUA jenis nomor/link/akun/nama toko/ajakan (chat, follow, klik link) dari judul & deskripsi semua produk? Teks asli tetap tersimpan.")) guard(async () => { const r = await api("/api/collections/" + id + "/clean-all", { shopNames: shop.value.split(",").map(x => x.trim()).filter(Boolean) }); toast("Dibersihkan: " + (r.changed ?? r.cleaned ?? 0) + " produk"); await scan(); after(); }); } }, "🧹 Bersihkan semua identitas & ajakan")), h("div", { class: "gap" }), out), true);
     await scan();
   });
 }
@@ -418,7 +458,7 @@ function stockDialog(id, after) {
 function feeDialog(mk, after) {
   guard(async () => {
     const prof = await api("/api/fees/profile?marketplace=" + mk);
-    let comps = prof.components.map(c => ({ ...c }));
+    let comps = prof.components.map(c => ({ ...c })), aiMeta = null;
     const box = h("div", {}), out = h("div", { class: "gap" });
     const verified = h("input", { type: "checkbox", checked: prof.status === "VERIFIED_BY_USER" });
     const draw = () => box.replaceChildren(h("table", {}, h("thead", {}, h("tr", {}, ...["Aktif", "Nama biaya", "Jenis", "Nilai", "Batas maks/item (Rp)", "Dinamis", ""].map(x => h("th", {}, x)))),
@@ -435,11 +475,11 @@ function feeDialog(mk, after) {
       h("div", { class: "gap" }), box,
       h("div", { class: "row gap" }, h("button", { onclick: () => guard(async () => { const r = await api("/api/fees/research", { marketplace: mk, category: cat.value }); const sg = r.suggestion;
         out.replaceChildren(h("div", { class: "note" }, r.warning + " Sumber: " + (sg.sources.join(", ") || "-") + " · data: " + (sg.dataDate || "?")), h("table", {}, ...sg.components.map(c => h("tr", {}, h("td", {}, c.name), h("td", {}, c.kind === "percent" ? c.value + "%" : rp(c.value)), h("td", {}, c.cap ? "maks " + rp(c.cap) : ""), h("td", { class: "small mut" }, c.note)))),
-          h("button", { class: "sm", onclick: () => { comps = sg.components.map(c => ({ ...c })); draw(); out.replaceChildren(h("div", { class: "note" }, "Usulan dimuat ke tabel di atas — periksa lalu Simpan.")); } }, "Muat usulan ke tabel")); }) }, "🔎 Cari tarif dengan AI"), cat),
+          h("button", { class: "sm", onclick: () => { comps = sg.components.map(c => ({ ...c })); aiMeta = { source: "Riset AI " + new Date().toISOString().slice(0, 10) + " (data: " + (sg.dataDate || "?") + "); sumber: " + (sg.sources.join(", ") || "-") }; draw(); out.replaceChildren(h("div", { class: "note" }, "Usulan dimuat ke tabel di atas — periksa lalu Simpan. Status akan menjadi AI_RESEARCHED (belum terverifikasi).")); } }, "Muat usulan ke tabel")); }) }, "🔎 Cari tarif dengan AI"), cat),
       out,
       h("div", { class: "row gap" }, h("label", { class: "chk" }, verified, "Sudah saya cocokkan dengan Seller Center"), h("span", { class: "grow" }),
         h("button", { class: "danger", onclick: () => guard(async () => { await api("/api/fees/reset", { marketplace: mk }); closeModal(); toast("Kembali ke bawaan"); after(); }) }, "Reset bawaan"),
-        h("button", { class: "pri", onclick: () => guard(async () => { await api("/api/fees/profile", { marketplace: mk, components: comps, overrides: prof.overrides, verified: verified.checked }); closeModal(); toast("Profil biaya disimpan"); after(); }) }, "Simpan"))), true);
+        h("button", { class: "pri", onclick: () => guard(async () => { await api("/api/fees/profile", { marketplace: mk, components: comps, overrides: prof.overrides, verified: verified.checked, aiResearched: !!aiMeta, source: aiMeta ? aiMeta.source : "" }); closeModal(); toast("Profil biaya disimpan"); after(); }) }, "Simpan"))), true);
   });
 }
 function priceDialog(id) {
@@ -447,18 +487,27 @@ function priceDialog(id) {
   const margin = h("input", { type: "number", value: 10, style: "width:80px" }), extra = h("input", { type: "number", value: 0, style: "width:100px" });
   const useAi = h("input", { type: "checkbox" }), csv = h("textarea", { style: "min-height:80px", placeholder: "id_produk_sumber,label,harga[,url]\nKP-001,Toko A,52000" });
   const out = h("div", { class: "gap" });
-  const VER = { RUGI: ["bad", "Rugi"], TIDAK_BISA_BERSAING: ["bad", "Tidak bisa bersaing"], MARGIN_TIPIS_JIKA_SAMAI: ["warn", "Margin tipis jika disamai"], TERLALU_MAHAL: ["warn", "Terlalu mahal"], KOMPETITIF: ["ok", "Kompetitif"], TANPA_PEMBANDING: ["", "Tanpa pembanding"], MODAL_TIDAK_ADA: ["bad", "Modal kosong"], BIAYA_TERLALU_BESAR: ["bad", "Biaya terlalu besar"] };
+  const VER = { RUGI: ["bad", "Rugi di harga kini"], TIDAK_BISA_BERSAING: ["bad", "Tidak bisa bersaing"], MARGIN_TIPIS_JIKA_SAMAI: ["warn", "Margin tipis jika disamai"], TERLALU_MAHAL: ["warn", "Terlalu mahal"], KOMPETITIF: ["ok", "Kompetitif"], TANPA_PEMBANDING: ["", "Tanpa pembanding"], HARGA_BELUM_DIATUR: ["warn", "Harga jual belum diatur"], MODAL_TIDAK_ADA: ["bad", "Modal kosong"], BIAYA_TERLALU_BESAR: ["bad", "Biaya terlalu besar"] };
   const feeRows = b => b ? h("div", { class: "small" }, ...b.items.map(i => h("div", {}, i.name + ": " + rp(i.amount) + (i.capped ? " (kena batas)" : "") + (i.overridden ? " (tarif kategori)" : ""))), h("div", {}, h("b", {}, "Total biaya " + rp(b.total) + " · laba " + rp(b.profit) + " (" + b.marginPct.toFixed(1) + "%)"))) : "-";
   const run = () => guard(async () => {
     const r = await api("/api/collections/" + id + "/price-advice", { marketplace: mk.value, targetMarginPct: +margin.value, extraCost: +extra.value || 0, useAiPrices: useAi.checked });
-    out.replaceChildren(h("div", { class: "note" }, "Profil biaya " + mk.value + ": " + r.feeStatus + (r.feeStatus !== "VERIFIED_BY_USER" ? " — tarif belum Anda verifikasi!" : "") + " · " + Object.entries(r.summary).map(([k, n]) => (VER[k] || [0, k])[1] + ": " + n).join(" · ")),
+    out.replaceChildren(!r.ruleSet ? h("div", { class: "note" }, "Harga jual belum diatur (Collection Settings → Price rule), jadi kolom 'Harga kini' kosong dan tidak ada yang dinilai rugi. Pakai kolom 'Harga rekomendasi' sebagai acuan markup: sudah dihitung setelah semua biaya platform.") : null,
+      h("div", { class: "note" }, "Profil biaya " + mk.value + ": " + r.feeStatus + (r.feeStatus !== "VERIFIED_BY_USER" ? " — tarif belum Anda verifikasi!" : "") + " · " + Object.entries(r.summary).map(([k, n]) => (VER[k] || [0, k])[1] + ": " + n).join(" · ")),
       h("div", { style: "overflow:auto;max-height:420px" }, h("table", {}, h("thead", {}, h("tr", {}, ...["Produk", "Modal", "Harga kini", "Rincian biaya di harga saran", "Impas", "Kompetitor min / median", "Harga rekomendasi", "Status"].map(x => h("th", {}, x)))),
-        h("tbody", {}, ...r.items.map(i => { const v = VER[i.verdict] || ["", i.verdict]; return h("tr", {}, h("td", {}, h("a", { href: "#", onclick: e => { e.preventDefault(); productDialog(i.id); } }, i.title)), h("td", {}, rp(i.cost)), h("td", {}, rp(i.priceNow)), h("td", {}, feeRows(i.atFloor)), h("td", {}, rp(i.breakEven)),
+        h("tbody", {}, ...r.items.map(i => { const v = VER[i.verdict] || ["", i.verdict]; return h("tr", {}, h("td", {}, h("a", { href: "#", onclick: e => { e.preventDefault(); productDialog(i.id); } }, i.title)), h("td", {}, rp(i.cost)), h("td", {}, rp(i.priceNow), i.priceSource ? h("div", { class: "small mut" }, i.priceSource === "rekomendasi" ? "harga rekomendasi" : "aturan harga") : null), h("td", {}, feeRows(i.atFloor)), h("td", {}, rp(i.breakEven)),
           h("td", { class: "small" }, i.compCount ? rp(i.compMin) + " / " + rp(i.compMedian) + " (" + i.compCount + ")" : "-", i.aiHidden ? h("div", { class: "mut" }, i.aiHidden + " harga AI belum dipakai") : null), h("td", {}, h("b", {}, i.suggested ? rp(i.suggested) : "-")), h("td", {}, h("span", { class: "badge " + v[0] }, v[1]))); })))));
   });
   modal("Harga & Kompetitor (sadar biaya platform)", h("div", {}, h("div", { class: "note" }, "Harga rekomendasi = harga terkecil yang masih memberi laba bersih sesuai target SETELAH semua biaya platform (komisi dinamis per kategori, batas maksimum, biaya tetap, biaya lain) dan biaya tambahan Anda. Harga kompetitor diisi manual/CSV, atau dicari Gemini + Google Search (hasil AI harus Anda verifikasi)."),
     h("div", { class: "row gap" }, h("label", {}, "Marketplace", mk), h("button", { onclick: () => feeDialog(mk.value, () => priceDialog(id)) }, "⚙️ Biaya platform"), h("label", {}, "Target margin (%)", margin), h("label", {}, "Biaya tambahan/pesanan (Rp)", extra),
       h("label", { class: "chk" }, useAi, "Pakai harga kompetitor hasil AI"), h("button", { class: "pri", onclick: run }, "Hitung")),
+    h("div", { class: "row gap" }, h("button", { onclick: () => guard(async () => {
+        const body = { marketplace: mk.value, targetMarginPct: +margin.value, extraCost: +extra.value || 0, useAiPrices: useAi.checked };
+        const pv = await api("/api/collections/" + id + "/apply-prices", { ...body, apply: false });
+        if (!pv.count) { toast("Tidak ada harga yang bisa dihitung (modal kosong?)", true); return; }
+        if (confirm("Terapkan " + pv.count + " harga rekomendasi (" + mk.value + ", margin " + margin.value + "%) sebagai harga jual?" + (pv.feeStatus !== "VERIFIED_BY_USER" ? "\n\nPeringatan: tarif biaya platform belum Anda verifikasi." : "") + "\nHarga ini dipakai upload/export menggantikan aturan harga. Bisa dikembalikan.")) {
+          const r = await api("/api/collections/" + id + "/apply-prices", { ...body, apply: true }); toast(r.count + " harga diterapkan"); run();
+        }
+      }) }, "✅ Terapkan harga rekomendasi"), h("button", { onclick: () => guard(async () => { if (confirm("Kembalikan semua harga ke aturan harga Collection Settings?")) { const r = await api("/api/collections/" + id + "/clear-prices", { marketplace: mk.value }); toast(r.cleared + " harga dikembalikan"); run(); } }) }, "↩ Kembali ke aturan harga")),
     h("div", { class: "row gap" }, h("button", { onclick: () => guard(async () => { out.replaceChildren(h("div", { class: "mut" }, "Gemini mencari harga…")); const r = await api("/api/collections/" + id + "/research-competitors", { limit: 5 }); toast(r.found + " harga ditemukan (tandai 'AI ·', perlu verifikasi)"); useAi.checked = true; run(); }) }, "🔎 Cari harga kompetitor dengan AI (5 produk pertama)")),
     h("details", { class: "gap" }, h("summary", {}, "Impor harga kompetitor (CSV)"), csv, h("button", { class: "sm", onclick: () => guard(async () => { const r = await api("/api/collections/" + id + "/competitors-import", { csvText: csv.value }); toast(r.imported + " harga diimpor" + (r.problems.length ? ", " + r.problems.length + " baris bermasalah" : ""), r.problems.length > 0); run(); }) }, "Impor")), out), true);
 }

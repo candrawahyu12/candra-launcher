@@ -414,7 +414,9 @@ class ImageAndPriceTests(unittest.TestCase):
         self.svc.set_collection_settings(self.col, {"price_rule": {"percent": 40}})
         self.assertEqual(self.svc.price_advice(self.col, commission_pct=0, product_ids=[pid])["items"][0]["verdict"], "TANPA_PEMBANDING")
         self.svc.set_collection_settings(self.col, {"price_rule": {"percent": 0}})
-        self.assertEqual(self.svc.price_advice(self.col, commission_pct=10, product_ids=[pid])["items"][0]["verdict"], "RUGI")  # harga = modal, komisi memakan margin
+        self.assertEqual(self.svc.price_advice(self.col, commission_pct=10, product_ids=[pid])["items"][0]["verdict"], "HARGA_BELUM_DIATUR")  # tanpa aturan harga tidak dinilai rugi
+        self.svc.set_collection_settings(self.col, {"price_rule": {"percent": 1}})
+        self.assertEqual(self.svc.price_advice(self.col, commission_pct=10, product_ids=[pid])["items"][0]["verdict"], "RUGI")  # markup 1% < komisi 10%
         self.svc.set_collection_settings(self.col, {"price_rule": {"percent": 40}})
         a = self.svc.price_advice(self.col, commission_pct=10, fixed_cost=1000, target_margin_pct=10, product_ids=[pid])
         self.assertEqual(a["items"][0]["verdict"], "TANPA_PEMBANDING")
@@ -431,6 +433,24 @@ class ImageAndPriceTests(unittest.TestCase):
             self.svc.price_advice(self.col, commission_pct=70)
         r = self.svc.import_competitors(self.col, "id,label,harga\nCL-010,Toko Z,Rp 195.000\nXX,Toko Q,1000\n")
         self.assertEqual((r["imported"], len(r["problems"])), (1, 1))
+
+    def test_apply_recommended_prices_override_rule_and_verdict(self):
+        self.svc.set_collection_settings(self.col, {"price_rule": {"mode": "percent", "percent": 1}})   # markup 1%: jelas rugi setelah biaya
+        adv = self.svc.price_advice(self.col, marketplace="shopee")
+        self.assertIn("RUGI", adv["summary"])
+        pv = self.svc.apply_recommended_prices(self.col, "shopee", 10.0)
+        self.assertFalse(pv["applied"]); self.assertGreater(pv["count"], 0)
+        self.assertEqual(self.svc.db.one("SELECT COUNT(*) n FROM price_overrides")["n"], 0)               # pratinjau tidak menyimpan
+        r = self.svc.apply_recommended_prices(self.col, "shopee", 10.0, apply=True)
+        self.assertEqual(self.svc.db.one("SELECT COUNT(*) n FROM price_overrides")["n"], r["count"])
+        adv2 = self.svc.price_advice(self.col, marketplace="shopee")
+        self.assertNotIn("RUGI", adv2["summary"])                                                         # status ikut diperbarui
+        self.assertTrue(all(i["priceSource"] == "rekomendasi" for i in adv2["items"] if i.get("priceNow")))
+        pvu = self.svc.preview_upload(collection_id=self.col, target="sandbox", selection={"mode": "all"}, config={})
+        ov = {(o["product_id"], o["variant_id"]): o["price"] for o in self.svc.db.query("SELECT * FROM price_overrides")}
+        self.assertTrue(ov)
+        self.assertEqual(self.svc.clear_price_overrides(self.col)["cleared"], r["count"])
+        self.assertIn("RUGI", self.svc.price_advice(self.col, marketplace="shopee")["summary"])
 
     def test_stock_edit_preview_apply_and_payload(self):
         r = self.svc.bulk_stock(self.col, None, "cap", 20, apply=False)
@@ -534,6 +554,76 @@ class FeeAndResearchTests(unittest.TestCase):
             os.environ.pop("GEMINI_API_KEY", None)
         with self.assertRaises(ServiceError):
             make_svc().research_competitors(1)
+
+
+class TextAiTests(unittest.TestCase):
+    def setUp(self):
+        self.svc = make_svc()
+        self.svc.create_scrape_job(source_platform="csv_feed", input_mode="csv", inputs={"csv_text": SAMPLE}, collection_name="K",
+                                   rights_declaration="own"); self.svc.jobs.run_pending()
+        self.col = self.svc.db.one("SELECT id FROM collections")["id"]
+        self.pid = self.svc.db.one("SELECT id FROM products WHERE title_original LIKE 'Celana%'")["id"]
+
+    def test_clean_all_removes_cta_and_contacts_but_keeps_specs(self):
+        self.svc.db.execute("UPDATE products SET description_original=? WHERE id=?",
+                            ("Celana chino ukuran 30-34 bahan stretch. Order sekarang! Chat kami di WA: 081234567890. Silakan chat dulu sebelum order.", self.pid))
+        r = self.svc.clean_all_text(self.col)
+        self.assertGreater(r["changed"], 0)
+        d = self.svc.db.one("SELECT description_edited FROM products WHERE id=?", (self.pid,))["description_edited"].lower()
+        for bad in ("order sekarang", "chat kami", "081234567890", "silakan chat"):
+            self.assertNotIn(bad, d)
+        self.assertIn("30-34", d); self.assertIn("stretch", d)
+
+    def test_apply_selected_text_only_what_is_chosen_and_validated(self):
+        t0 = self.svc.db.one("SELECT title_original FROM products WHERE id=?", (self.pid,))["title_original"]
+        r = self.svc.apply_text_suggestions(self.col, [{"id": self.pid, "title": "Celana Chino Slim Fit Pria Stretch Panjang"}])
+        self.assertEqual(r["applied"], 1)
+        row = self.svc.db.one("SELECT title_edited, description_edited, title_original FROM products WHERE id=?", (self.pid,))
+        self.assertEqual(row["title_edited"], "Celana Chino Slim Fit Pria Stretch Panjang")
+        self.assertIsNone(row["description_edited"])            # deskripsi tidak dipilih: tidak disentuh
+        self.assertEqual(row["title_original"], t0)             # teks asli utuh
+        bad = self.svc.apply_text_suggestions(self.col, [{"id": self.pid, "title": "Celana Chino 99 Pcs WA 081234567890"}])
+        self.assertEqual(bad["applied"], 0); self.assertTrue(bad["rejected"])  # angka baru/kontak ditolak server
+        other = self.svc.apply_text_suggestions(self.col, [{"id": 99999, "title": "x"}])
+        self.assertEqual(other["rejected"][0]["errors"], ["BUKAN_PRODUK_COLLECTION_INI"])
+
+    def test_gemini_title_suggestions_are_suggestions_only(self):
+        os.environ["GEMINI_API_KEY"] = "dummy"
+        try:
+            reply = json.dumps([{"id": self.pid, "title": "Celana Chino Slim Fit Pria Stretch", "keywords": ["celana chino", "slim fit"]}])
+            self.svc.providers["gemini"].transport = lambda url, headers, body: {"candidates": [{"content": {"parts": [{"text": reply}]}}]}
+            before = self.svc.db.one("SELECT title_edited FROM products WHERE id=?", (self.pid,))["title_edited"]
+            r = self.svc.suggest_marketplace_titles(self.col, "tokopedia")
+            self.assertEqual(r["maxTitle"], 70)
+            self.assertTrue(any(x["id"] == self.pid for x in r["results"]))
+            self.assertEqual(self.svc.db.one("SELECT title_edited FROM products WHERE id=?", (self.pid,))["title_edited"], before)  # belum berubah
+            with self.assertRaises(ServiceError):
+                self.svc.suggest_marketplace_titles(self.col, "lazada")
+        finally:
+            os.environ.pop("GEMINI_API_KEY", None)
+
+    def test_gemini_404_falls_back_through_models_and_reports_all(self):
+        os.environ["GEMINI_API_KEY"] = "dummy"
+        try:
+            from candra.optimizer import GeminiProvider
+            seen = []
+
+            def transport(url, headers, body):
+                seen.append(url)
+                if body is None:
+                    return {"models": []}
+                if "gemini-flash-latest" in url:
+                    return {"candidates": [{"content": {"parts": [{"text": "{}"}]}}]}
+                raise ValueError("AI_HTTP_404")
+            g = GeminiProvider(model="model-lama", transport=transport)
+            g._call({"contents": []})
+            self.assertEqual(g.model, "gemini-flash-latest")
+            g2 = GeminiProvider(model="model-lama", transport=lambda u, h, b: {"models": []} if b is None else (_ for _ in ()).throw(ValueError("AI_HTTP_404")))
+            with self.assertRaises(ValueError) as cx:
+                g2._call({"contents": []})
+            self.assertIn("model-lama", str(cx.exception)); self.assertIn("gemini-2.5-flash", str(cx.exception))
+        finally:
+            os.environ.pop("GEMINI_API_KEY", None)
 
 
 class CaptureTests(unittest.TestCase):

@@ -291,7 +291,9 @@ def build_payload(db: DB, product_id: int, target: str, cfg: dict, index: int = 
             stock = cfg["fixed_stock"]
         weight = v["weight_gram"] or extra_weight or cfg["default_weight_gram"]
         try:
-            price = compute_price(v["price_original"], rule)
+            ov = db.one("SELECT price FROM price_overrides WHERE product_id=? AND variant_id=? ORDER BY updated_at DESC LIMIT 1",
+                        (product_id, v.get("id") or 0))
+            price = int(ov["price"]) if ov else compute_price(v["price_original"], rule)  # harga rekomendasi yang Anda terapkan menang atas aturan harga
             sim = simulate(v["price_original"], price, rule.commission_pct, rule.fixed_cost)
             prices.append({"sku": sku, **sim})
         except (PricingError, TypeError) as e:

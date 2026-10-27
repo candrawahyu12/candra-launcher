@@ -187,6 +187,11 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
         def route_post(self, path: str, b: dict):
             if path == "/api/sources":
                 return svc.add_source(b["platform"], b["domain"], b.get("permissionNote", ""))
+            if m := re.fullmatch(r"/api/collections/(\d+)/apply-prices", path):
+                return svc.apply_recommended_prices(int(m[1]), b.get("marketplace", ""), float(b.get("targetMarginPct", 10)), float(b.get("extraCost", 0) or 0),
+                                                   bool(b.get("useAiPrices")), b.get("productIds"), int(b.get("roundStep", 100)), apply=b.get("apply") is True)
+            if m := re.fullmatch(r"/api/collections/(\d+)/clear-prices", path):
+                return svc.clear_price_overrides(int(m[1]), b.get("marketplace") or None)
             if path == "/api/storage/limit":
                 return svc.set_storage_limit(b.get("limitMb"))
             if path == "/api/storage/cleanup":
@@ -231,7 +236,7 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
                                         extra_cost=float(b.get("extraCost") or 0), use_ai_prices=bool(b.get("useAiPrices")),
                                         product_ids=b.get("productIds"))
             if path == "/api/fees/profile":
-                return svc.set_fee_profile(b.get("marketplace", ""), b.get("components"), b.get("overrides"), bool(b.get("verified")), b.get("source", ""))
+                return svc.set_fee_profile(b.get("marketplace", ""), b.get("components"), b.get("overrides"), bool(b.get("verified")), b.get("source", ""), bool(b.get("aiResearched")))
             if path == "/api/fees/reset":
                 return svc.reset_fee_profile(b.get("marketplace", ""))
             if path == "/api/fees/research":
@@ -296,6 +301,12 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
             if m := re.fullmatch(r"/api/collections/(\d+)/optimize", path):
                 return svc.optimize_products(int(m[1]), b.get("productIds"), b.get("target", "export_csv"),
                                              apply=bool(b.get("apply")), shop_names=b.get("shopNames"))
+            if m := re.fullmatch(r"/api/collections/(\d+)/apply-text", path):
+                return svc.apply_text_suggestions(int(m[1]), b.get("items") or [], b.get("shopNames"), int(b.get("maxTitle", 100)), b.get("source", "ai-selected"))
+            if m := re.fullmatch(r"/api/collections/(\d+)/suggest-titles", path):
+                return svc.suggest_marketplace_titles(int(m[1]), b.get("marketplace", ""), b.get("productIds"), b.get("shopNames"), int(b.get("limit", 20)))
+            if m := re.fullmatch(r"/api/collections/(\d+)/clean-all", path):
+                return svc.clean_all_text(int(m[1]), b.get("productIds"), b.get("shopNames"))
             if m := re.fullmatch(r"/api/collections/(\d+)/price-simulation", path):
                 return svc.price_simulation(int(m[1]), b.get("rule") or {})
             if m := re.fullmatch(r"/api/collections/(\d+)/export", path):

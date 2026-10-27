@@ -184,7 +184,7 @@
 
   // ---------- UI ----------
   const style = document.createElement("style");
-  style.textContent = `.candra-btn{position:absolute;top:6px;left:6px;z-index:2147483000;background:#2f6bff;color:#fff;border:0;border-radius:6px;padding:4px 8px;font:600 12px system-ui;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.35)}
+  style.textContent = `.candra-btn{position:fixed;display:none;z-index:2147483000;background:#2f6bff;color:#fff;border:0;border-radius:6px;padding:4px 8px;font:600 12px system-ui;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.35)}
 .candra-btn:hover{background:#1f4fd1}.candra-btn.ok{background:#13a05b}.candra-btn.err{background:#d93b3b}
 #candra-panel{position:fixed;right:16px;bottom:16px;z-index:2147483000;background:#16213e;color:#fff;border-radius:10px;padding:10px 12px;font:13px system-ui;box-shadow:0 2px 12px rgba(0,0,0,.4);max-width:280px}
 #candra-panel button{background:#2f6bff;color:#fff;border:0;border-radius:6px;padding:6px 10px;margin-top:6px;cursor:pointer;font:600 12px system-ui;display:block;width:100%}
@@ -205,25 +205,24 @@
   }
 
   const isDetail = () => IS_SHOPEE ? SHOPEE_ID.test(location.pathname) || /\/product\/\d+\/\d+/.test(location.pathname) : productLinkOk(location.href);
+  let detailBtn = null;
   function mount() {
-    if (isDetail()) {
-      const b = document.createElement("button"); b.textContent = "Kirim produk ini ke CANDRA";
-      b.onclick = async () => {
-        b.disabled = true;
-        const d = extractDetail();
-        const st = await new Promise(res => chrome.runtime.sendMessage({ type: "settings" }, r => res((r && r.result) || {})));
-        if (st.deepVariants !== false && Object.keys(variantGroups()).length) {
-          msg.textContent = "Membaca harga & foto tiap varian...";
-          try { const dv = await deepVariants(); if (dv.length) d.variants = dv; } catch (e) { /* tetap kirim tanpa detail varian */ }
-        }
-        const miss = health(d);
-        const r = await send([d]);
-        report(r, 1);
-        if (r.ok && miss.length) msg.textContent += " | Tidak terbaca: " + miss.join(", ") + " (lihat 'Unduh diagnostik halaman' di popup)";
-        b.disabled = false;
-      };
-      panel.insertBefore(b, msg);
-    }
+    detailBtn = document.createElement("button"); detailBtn.textContent = "Kirim produk ini ke CANDRA";
+    detailBtn.onclick = async () => {
+      detailBtn.disabled = true;
+      const d = extractDetail();
+      const st = await new Promise(res => chrome.runtime.sendMessage({ type: "settings" }, r => res((r && r.result) || {})));
+      if (st.deepVariants !== false && Object.keys(variantGroups()).length) {
+        msg.textContent = "Membaca harga & foto tiap varian...";
+        try { const dv = await deepVariants(); if (dv.length) d.variants = dv; } catch (e) { /* tetap kirim tanpa detail varian */ }
+      }
+      const miss = health(d);
+      const r = await send([d]);
+      report(r, 1);
+      if (r.ok && miss.length) msg.textContent += " | Tidak terbaca: " + miss.join(", ") + " (lihat 'Unduh diagnostik halaman' di popup)";
+      detailBtn.disabled = false;
+    };
+    panel.insertBefore(detailBtn, msg);
     const all = document.createElement("button"); all.textContent = "Kirim semua produk di halaman ini";
     all.onclick = async () => {
       const cards = cardAnchors().slice(0, 60);
@@ -232,29 +231,40 @@
     };
     panel.insertBefore(all, msg);
     document.body.appendChild(panel);
+    const sync = () => { detailBtn.style.display = isDetail() ? "block" : "none"; };  // Shopee/Tokopedia = SPA: URL bisa berganti tanpa muat ulang
+    sync(); setInterval(sync, 1000);
   }
   const cardAnchors = () => [...document.querySelectorAll("a[href]")].filter(a => a.querySelector("img") && productLinkOk(a.href) && !a.closest("#candra-panel"));
-  function decorate() {
-    for (const a of cardAnchors()) {
-      if (a.dataset.candra) continue;
-      a.dataset.candra = "1";
-      const holder = a.querySelector("img").parentElement;
-      if (!holder) continue;
-      if (getComputedStyle(holder).position === "static") holder.style.position = "relative";
-      const b = document.createElement("button"); b.className = "candra-btn"; b.textContent = "Kirim ke CANDRA";
-      b.onclick = async e => {
-        e.preventDefault(); e.stopPropagation();
-        const r = await send([extractCard(a)]);
-        b.className = "candra-btn " + (report(r, 1) ? "ok" : "err"); b.textContent = r.ok ? "Terkirim ✓" : "Gagal";
-      };
-      holder.appendChild(b);
-    }
-  }
-  // muat aturan: simpanan lokal dulu, lalu coba perbarui dari aplikasi (gagal = pakai yang ada)
+  // Tombol mengambang: satu elemen di <body>, diposisikan di atas kartu yang sedang di-hover.
+  // TIDAK menambah/mengubah elemen di dalam kartu marketplace (sebelumnya merusak tata letak & gambar kartu).
+  const floatBtn = document.createElement("button"); floatBtn.className = "candra-btn"; floatBtn.textContent = "Kirim ke CANDRA";
+  document.body.appendChild(floatBtn);
+  let curCard = null, hideT = null;
+  const placeBtn = a => {
+    const im = a.querySelector("img"), r = (im || a).getBoundingClientRect();
+    if (r.width < 40 || r.bottom < 0 || r.top > innerHeight) { floatBtn.style.display = "none"; return; }
+    floatBtn.style.top = Math.max(r.top + 6, 4) + "px"; floatBtn.style.left = (r.left + 6) + "px"; floatBtn.style.display = "block";
+  };
+  document.addEventListener("mouseover", e => {
+    if (e.target === floatBtn) { clearTimeout(hideT); return; }
+    const a = e.target.closest && e.target.closest("a[href]");
+    if (a && !a.closest("#candra-panel") && a.querySelector("img") && productLinkOk(a.href)) {
+      clearTimeout(hideT);
+      if (a !== curCard) { curCard = a; floatBtn.className = "candra-btn"; floatBtn.textContent = "Kirim ke CANDRA"; }
+      placeBtn(a);
+    } else { clearTimeout(hideT); hideT = setTimeout(() => { floatBtn.style.display = "none"; }, 350); }
+  }, true);
+  addEventListener("scroll", () => { floatBtn.style.display = "none"; }, { passive: true });
+  floatBtn.onclick = async e => {
+    e.preventDefault(); e.stopPropagation();
+    if (!curCard) return;
+    const r = await send([extractCard(curCard)]);
+    floatBtn.className = "candra-btn " + (report(r, 1) ? "ok" : "err"); floatBtn.textContent = r.ok ? "Terkirim ✓" : "Gagal";
+  };
+
   chrome.runtime.sendMessage({ type: "settings" }, r => { const x = r && r.result && r.result.rules; if (x) R = { ...R, ...x }; });
   chrome.runtime.sendMessage({ type: "rules" }, r => { if (r && r.ok && r.result) R = { ...R, ...r.result }; });
-  mount(); decorate();
-  let t; new MutationObserver(() => { clearTimeout(t); t = setTimeout(decorate, 400); }).observe(document.body, { childList: true, subtree: true });
+  mount();
 
   chrome.runtime.onMessage.addListener((m, _s, reply) => {
     if (m.type === "diagnose") reply({ health: health(extractDetail()), rulesVersion: R.version || 0, url: cleanUrl(location.href), detail: extractDetail(), cards: cardAnchors().slice(0, 3).map(extractCard), ldFound: !!ldProduct(), h1: text(document.querySelector("h1")).slice(0, 120) });
