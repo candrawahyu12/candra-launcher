@@ -4,22 +4,35 @@ async function cfg() {
   const c = await chrome.storage.local.get(["base", "token"]);
   return { base: (c.base || DEFAULT_BASE).replace(/\/+$/, ""), token: c.token || "" };
 }
-async function call(path, body) {
-  const { base, token } = await cfg();
-  if (!/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(base)) throw new Error("Alamat aplikasi harus 127.0.0.1 atau localhost");
-  const r = await fetch(base + path, body === undefined ? { headers: { "X-Candra-Token": token } } : {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Candra-Client": "1", "X-Candra-Token": token },
-    body: JSON.stringify(body)
-  });
+async function pairToken(base) { // pasangan otomatis: aplikasi CANDRA ada di komputer yang sama (127.0.0.1); halaman web biasa tidak bisa membaca ini (CORS)
+  const r = await fetch(base + "/api/capture/token");
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(r.status === 401 ? "Token salah: salin ulang dari CANDRA > Settings > Ekstensi Chrome" : (j.error || "HTTP " + r.status));
+  if (!r.ok || !j.token) throw new Error("Aplikasi CANDRA tidak merespons di " + base + ". Pastikan CANDRA sedang berjalan.");
+  await chrome.storage.local.set({ token: j.token });
+  return j.token;
+}
+async function call(path, body, retried) {
+  let { base, token } = await cfg();
+  if (!/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(base)) throw new Error("Alamat aplikasi harus 127.0.0.1 atau localhost");
+  if (!token) token = await pairToken(base);
+  let r;
+  try {
+    r = await fetch(base + path, body === undefined ? { headers: { "X-Candra-Token": token } } : {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Candra-Client": "1", "X-Candra-Token": token },
+      body: JSON.stringify(body)
+    });
+  } catch (_) { throw new Error("Tidak bisa menghubungi CANDRA di " + base + ". Pastikan aplikasi CANDRA sedang berjalan."); }
+  if (r.status === 401 && !retried) { await pairToken(base); return call(path, body, true); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(r.status === 401 ? "Token ditolak CANDRA" : (j.error || "HTTP " + r.status));
   return j;
 }
 async function callImage(path) {
   const { base, token } = await cfg();
   if (!/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(base)) throw new Error("Alamat aplikasi harus 127.0.0.1 atau localhost");
-  const r = await fetch(base + path, { headers: { "X-Candra-Token": token } });
+  let r = await fetch(base + path, { headers: { "X-Candra-Token": token } });
+  if (r.status === 401) { const t2 = await pairToken(base); r = await fetch(base + path, { headers: { "X-Candra-Token": t2 } }); }
   if (!r.ok) throw new Error("foto: HTTP " + r.status);
   const buf = new Uint8Array(await r.arrayBuffer());
   let bin = ""; for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));

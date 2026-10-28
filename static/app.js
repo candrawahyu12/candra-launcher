@@ -103,7 +103,7 @@ function grabForm(box, onStarted) {
   const disc = h("input", { type: "checkbox" }), titleOn = h("input", { type: "checkbox" });
   const titleQ = h("input", { placeholder: "kata kunci judul…", disabled: true });
   titleOn.onchange = () => titleQ.disabled = !titleOn.checked;
-  const rights = h("select", {}, ...[["supplier_permitted", "Izin supplier"], ["own", "Produk milik sendiri"], ["licensed", "Berlisensi"], ["unverified", "Belum diverifikasi"]].map(([k, l]) => h("option", { value: k }, l)));
+  const rights = h("select", {}, ...[["self_responsible", "Sumber publik — saya yang bertanggung jawab"], ["supplier_permitted", "Izin supplier"], ["own", "Produk milik sendiri"], ["licensed", "Berlisensi"], ["unverified", "Belum diverifikasi"]].map(([k, l]) => h("option", { value: k }, l)));
   const limit = h("input", { type: "number", min: 1, value: 100, style: "width:90px" });
   const out = h("div", { class: "gap" });
   const tabs = h("div", { class: "tabs" });
@@ -355,7 +355,7 @@ function dupDialog(id, after) {
   });
 }
 function rightsDialog(id, after) {
-  const s = h("select", {}, ...[["supplier_permitted", "Izin supplier"], ["own", "Milik sendiri"], ["licensed", "Berlisensi"], ["unverified", "Belum diverifikasi"]].map(([k, l]) => h("option", { value: k }, l)));
+  const s = h("select", {}, ...[["self_responsible", "Sumber publik — saya yang bertanggung jawab"], ["supplier_permitted", "Izin supplier"], ["own", "Milik sendiri"], ["licensed", "Berlisensi"], ["unverified", "Belum diverifikasi"]].map(([k, l]) => h("option", { value: k }, l)));
   modal("Hak atas konten (teks & gambar)", h("div", {}, h("div", { class: "note" }, "Upload hanya meloloskan produk dengan hak terverifikasi. Pernyataan ini dicatat per produk."), h("div", { class: "gap" }), s,
     h("div", { class: "row gap" }, h("button", { class: "pri", onclick: () => guard(async () => { const r = await api("/api/collections/" + id + "/rights", { status: s.value }); closeModal(); toast(r.updated + " produk diperbarui"); after(); }) }, "Terapkan ke semua produk"))));
 }

@@ -863,3 +863,19 @@ class AssistedFillTests(unittest.TestCase):
         r = self.svc.fill_rules(self.tok)
         for k in ("title", "description", "price", "stock", "weight", "sku"):
             self.assertTrue(r["fields"][k]["keywords"])
+
+
+class SelfResponsibleRightsTests(unittest.TestCase):
+    def test_self_responsible_is_recorded_and_not_blocked(self):
+        svc = make_svc(connectors={"sandbox": lambda cfg: SandboxConnector()})
+        svc.create_scrape_job(source_platform="csv_feed", input_mode="csv", inputs={"csv_text": SAMPLE},
+                              collection_name="K", rights_declaration="self_responsible")
+        svc.jobs.run_pending()
+        col = svc.db.one("SELECT id FROM collections")["id"]
+        self.assertEqual({r["rights_status"] for r in svc.db.query("SELECT rights_status FROM products")}, {"self_responsible"})
+        pv = svc.preview_upload(collection_id=col, target="sandbox", selection={"mode": "all"}, config={})
+        self.assertNotIn("RIGHTS_UNVERIFIED", pv["errorsByCode"])
+        with self.assertRaises(Exception):
+            svc.jobs  # noqa: B018
+            svc.create_scrape_job(source_platform="csv_feed", input_mode="csv", inputs={"csv_text": SAMPLE},
+                                  collection_name="K2", rights_declaration="bogus")

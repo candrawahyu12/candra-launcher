@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CANDRA Capture",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Kirim data produk yang tampil di halaman yang Anda buka sendiri ke aplikasi CANDRA di komputer Anda.",
   "permissions": [
     "storage",

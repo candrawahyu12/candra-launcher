@@ -22,7 +22,7 @@ from .policy import NO_BRAND, enforce
 from .pricing import PriceRule, PricingError, compute_price, decorate_description, decorate_title, simulate
 from .util import now, redact, sha256
 
-OK_RIGHTS = ("supplier_permitted", "own", "licensed")
+OK_RIGHTS = ("supplier_permitted", "own", "licensed", "self_responsible")
 MAX_ATTEMPTS = 3
 SELECTION_MODES = ("all", "selected", "ids", "range")
 

@@ -75,3 +75,7 @@ bisa berubah; bila data tidak lengkap, klik ikon ekstensi → "Unduh diagnostik 
 - Di halaman "Tambah Produk" Seller Center: ikon ekstensi → **Aktifkan Isi Form di situs ini** → panel *CANDRA · Isi Form* di kanan bawah → pilih produk → kolom nama, deskripsi, harga, stok, berat, SKU dan foto terisi. Kategori, merek (Tanpa Merek), COD (nonaktif) dan varian diisi manual dengan bantuan tombol Salin. Anda menekan Kirim sendiri, lalu klik **Sudah saya kirim ✓** (status di Process Monitor ikut berubah).
 - Aturan pengenal kolom ada di `candra/fill_rules.json` (ikut pembaruan aplikasi). Tombol *Diagnostik kolom* menyalin daftar kolom (tanpa isinya) bila ada yang tidak terisi.
 - Ekstensi v0.2.0: muat ulang di chrome://extensions.
+
+## v0.11.1
+- Ekstensi v0.2.1: **pairing token otomatis** (tidak perlu menyalin token; bila kosong/ditolak, ekstensi mengambilnya dari CANDRA di 127.0.0.1). Pesan jelas bila CANDRA sedang tidak berjalan.
+- Hak konten: opsi **"Sumber publik — saya yang bertanggung jawab"** (tercatat apa adanya di jejak audit; tidak dianggap izin supplier).
