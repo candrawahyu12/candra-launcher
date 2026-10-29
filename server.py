@@ -39,7 +39,15 @@ def load_env_file(path: str) -> None:
             os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
 
 
-KEY_RE = re.compile(r"^[A-Za-z0-9_\-]{20,120}$")
+KEY_RE = re.compile(r"^[A-Za-z0-9_.\-~+/=]{20,300}$")  # kunci Google bisa memuat titik (format baru "AQ.xxxx") dan karakter base64
+
+
+def clean_key_input(raw: str) -> str:
+    """Rapikan hasil tempel: buang spasi/baris baru di tepi, tanda kutip, awalan 'GEMINI_API_KEY=' atau 'Bearer '."""
+    k = str(raw or "").strip().strip("\"'`").strip()
+    k = re.sub(r"(?i)^(export\s+)?(GEMINI_API_KEY|GOOGLE_API_KEY)\s*[=:]\s*", "", k).strip().strip("\"'`").strip()
+    k = re.sub(r"(?i)^bearer\s+", "", k)
+    return k
 
 
 def write_env_value(path: str, name: str, value: Optional[str]) -> None:
@@ -233,7 +241,8 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
                 return svc.add_source(b["platform"], b["domain"], b.get("permissionNote", ""))
             if m := re.fullmatch(r"/api/collections/(\d+)/apply-prices", path):
                 return svc.apply_recommended_prices(int(m[1]), b.get("marketplace", ""), float(b.get("targetMarginPct", 10)), float(b.get("extraCost", 0) or 0),
-                                                   bool(b.get("useAiPrices")), b.get("productIds"), int(b.get("roundStep", 100)), apply=b.get("apply") is True)
+                                                   bool(b.get("useAiPrices")), b.get("productIds"), int(b.get("roundStep", 100)), apply=b.get("apply") is True,
+                                                   markup_fixed=float(b.get("markupFixed", 0) or 0))
             if m := re.fullmatch(r"/api/collections/(\d+)/clear-prices", path):
                 return svc.clear_price_overrides(int(m[1]), b.get("marketplace") or None)
             if path == "/api/storage/limit":
@@ -263,12 +272,21 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
                 return svc.clear_product_categories(int(m[1]), b.get("marketplace", ""), b.get("onlyAuto", True) is not False)
             if path == "/api/product-category":
                 return svc.set_product_category(int(b["productId"]), b.get("marketplace", ""), str(b.get("categoryId", "")))
+            if path == "/api/categories/import-file":
+                import base64
+                try:
+                    raw = base64.b64decode(b.get("dataBase64") or "", validate=False)
+                except Exception:  # noqa: BLE001
+                    raise ServiceError("berkas tidak terbaca (base64 rusak)")
+                return svc.import_categories_file(b.get("marketplace", ""), str(b.get("filename", "")), raw)
             if path == "/api/categories/import":
                 return svc.import_categories(b.get("marketplace", ""), b.get("csvText", ""))
             if m := re.fullmatch(r"/api/collections/(\d+)/suggest-categories", path):
                 return svc.suggest_categories(int(m[1]), b.get("marketplace", ""), bool(b.get("apply")))
             if m := re.fullmatch(r"/api/collections/(\d+)/images", path):
-                return svc.process_images(int(m[1]), b.get("marketplace", ""), b.get("productIds"), b.get("spec"), b.get("shopNames"), bool(b.get("force")))
+                return svc.process_images(int(m[1]), b.get("marketplace", ""), b.get("productIds"), b.get("spec"), b.get("shopNames"), bool(b.get("force")), bool(b.get("geminiOcr")))
+            if m := re.fullmatch(r"/api/collections/(\d+)/images/approve-unchecked", path):
+                return svc.approve_unchecked(int(m[1]), b.get("marketplace", ""))
             if path == "/api/images/exclude":
                 return svc.exclude_image(int(b["imageId"]), b.get("marketplace", ""))
             if m := re.fullmatch(r"/api/collections/(\d+)/images/exclude-flagged", path):
@@ -285,11 +303,23 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
                 return svc.price_advice(int(m[1]), marketplace=b.get("marketplace") or None, commission_pct=b.get("commissionPct"),
                                         fixed_cost=b.get("fixedCost"), target_margin_pct=float(b.get("targetMarginPct", 10)),
                                         extra_cost=float(b.get("extraCost") or 0), use_ai_prices=bool(b.get("useAiPrices")),
-                                        product_ids=b.get("productIds"))
+                                        product_ids=b.get("productIds"), markup_fixed=float(b.get("markupFixed", 0) or 0))
             if path == "/api/fees/profile":
                 return svc.set_fee_profile(b.get("marketplace", ""), b.get("components"), b.get("overrides"), bool(b.get("verified")), b.get("source", ""), bool(b.get("aiResearched")))
             if path == "/api/fees/reset":
                 return svc.reset_fee_profile(b.get("marketplace", ""))
+            if path == "/api/fees/from-file":
+                import base64
+                raw = b64 = b.get("dataBase64")
+                try:
+                    raw = base64.b64decode(b64, validate=False) if b64 else None
+                except Exception:  # noqa: BLE001
+                    raise ServiceError("berkas tidak terbaca (base64 rusak)")
+                return svc.fees_from_file(b.get("marketplace", ""), str(b.get("filename", "")), raw, b.get("text"),
+                                          str(b.get("sellerType") or "Non-Mall (Non-Star / reguler)"))
+            if m := re.fullmatch(r"/api/collections/(\d+)/set-price", path):
+                pr = b.get("price")
+                return svc.set_product_price(int(m[1]), int(b["productId"]), b.get("marketplace", ""), None if pr in (None, "") else pr)
             if path == "/api/fees/research":
                 return svc.research_fees(b.get("marketplace", ""), b.get("category", ""), b.get("sellerType", "Non-Star / reguler"))
             if path == "/api/fees/breakdown":
@@ -307,14 +337,15 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
             if path == "/api/validate-urls":
                 return svc.validate_urls(b.get("sourcePlatform", "web_jsonld"), b.get("inputMode", "detail_urls"), b.get("lines") or [])
             if path == "/api/ai/key":
-                k = str(b.get("key", "")).strip()
+                k = clean_key_input(b.get("key", ""))
                 env_path = os.path.join(ROOT, "candra.env")
                 if k == "":
                     write_env_value(env_path, "GEMINI_API_KEY", None)
                     os.environ.pop("GEMINI_API_KEY", None)
                     return {"configured": False}
                 if not KEY_RE.match(k):
-                    raise ServiceError("format kunci tidak valid (huruf/angka/_/-, 20-120 karakter). Salin ulang dari Google AI Studio.")
+                    why = "mengandung spasi/baris baru di tengah" if re.search(r"\s", k) else ("terlalu pendek" if len(k) < 20 else "memuat karakter yang tidak lazim")
+                    raise ServiceError(f"format kunci tidak valid ({why}; panjang {len(k)}). Salin ulang HANYA kuncinya dari Google AI Studio (tombol Copy).")
                 write_env_value(env_path, "GEMINI_API_KEY", k)
                 os.environ["GEMINI_API_KEY"] = k
                 return {"configured": True}
@@ -363,6 +394,8 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
                 return svc.analyze_collection(int(m[1]), b.get("shopNames"))
             if m := re.fullmatch(r"/api/collections/(\d+)/clean", path):
                 return svc.clean_products(int(m[1]), b["types"], b.get("productIds"), b.get("shopNames"))
+            if m := re.fullmatch(r"/api/collections/(\d+)/optimize-one", path):
+                return svc.optimize_one(int(m[1]), int(b["productId"]), b.get("shopNames") or [], int(b.get("maxTitle", 100)))
             if m := re.fullmatch(r"/api/collections/(\d+)/optimize", path):
                 return svc.optimize_products(int(m[1]), b.get("productIds"), b.get("target", "export_csv"),
                                              apply=bool(b.get("apply")), shop_names=b.get("shopNames"))

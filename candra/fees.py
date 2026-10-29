@@ -23,7 +23,7 @@ def D(x) -> Decimal:
 # ---- bawaan (DRAFT_UNVERIFIED). Sumber: artikel pihak ketiga yang dibaca 2026-10-24; BUKAN dokumen resmi platform.
 DEFAULT_PROFILES = {
     "shopee": {
-        "label": "Shopee (Non-Star, kategori fashion)", "status": "DRAFT_UNVERIFIED",
+        "label": "Shopee (toko reguler / non-Mall)", "status": "DRAFT_UNVERIFIED",
         "source": "remarketing.id (22 Agu 2026), bigseller.com: admin s.d. 10% sejak 1 Jan 2026; proses pesanan Rp1.250. Cek Seller Center.",
         "components": [
             {"name": "Biaya Administrasi", "kind": "percent", "value": 10, "cap": None, "dynamic": True, "enabled": True, "note": "naik/turun per kategori & tipe toko"},
@@ -39,7 +39,7 @@ DEFAULT_PROFILES = {
         ],
     },
     "tiktok": {
-        "label": "TikTok Shop / Tokopedia (komisi dinamis)", "status": "DRAFT_UNVERIFIED",
+        "label": "TikTok Shop / Tokopedia (toko reguler / non-Mall, komisi dinamis)", "status": "DRAFT_UNVERIFIED",
         "source": "salesmetrix.id (15 Sep 2026): komisi dinamis 3-8%, maks Rp60.000/item sejak 18 Mei 2026. Biaya lain: isi dari Seller Center.",
         "components": [
             {"name": "Komisi Dinamis", "kind": "percent", "value": 8, "cap": 60000, "dynamic": True, "enabled": True, "note": "3-8% menurut kategori; maks Rp60.000/item"},
@@ -133,22 +133,23 @@ def net_profit(price, cost, comps, overrides=None, category_text: str = "", extr
             "marginPct": float(profit / D(price) * 100) if D(price) else 0.0}
 
 
-def solve_price(cost, comps, overrides=None, category_text: str = "", margin_pct: float = 10.0, extra_cost=0, step: int = 1) -> int:
+def solve_price(cost, comps, overrides=None, category_text: str = "", margin_pct: float = 10.0, extra_cost=0, step: int = 1,
+                markup_fixed=0) -> int:
     """Harga jual terkecil (dibulatkan ke atas ke kelipatan `step`) sehingga laba bersih >= margin% dari harga jual,
     setelah SEMUA biaya (persen, tetap, batas maksimum, tarif dinamis kategori) dan extra_cost (packing, dll)."""
-    cost, extra, m = D(cost), D(extra_cost), D(margin_pct) / 100
+    cost, extra, m, mk = D(cost), D(extra_cost), D(margin_pct) / 100, D(markup_fixed)
     if cost <= 0:
         raise FeeError("modal harus > 0")
     pct = sum((D(c["value"]) for c in _effective(comps, overrides or [], category_text) if c["kind"] == "percent"), D(0)) / 100
     if pct + m >= 1:
         # dengan batas maksimum biaya masih mungkin layak; tetap coba, tapi batasi pencarian
         pass
-    lo, hi = int(cost), int((cost + extra + 1) * 50)
+    lo, hi = int(cost), int((cost + extra + mk + 1) * 50)
 
     def ok(P: int) -> bool:
         P = D(P)
         f = D(compute_fees(P, comps, overrides, category_text)["total"])
-        return P - cost - extra - f >= P * m
+        return P - cost - extra - f >= P * m + mk
 
     if not ok(hi):
         raise FeeError("tidak ada harga yang memenuhi margin dengan biaya sebesar ini")

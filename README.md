@@ -79,3 +79,14 @@ bisa berubah; bila data tidak lengkap, klik ikon ekstensi → "Unduh diagnostik 
 ## v0.11.1
 - Ekstensi v0.2.1: **pairing token otomatis** (tidak perlu menyalin token; bila kosong/ditolak, ekstensi mengambilnya dari CANDRA di 127.0.0.1). Pesan jelas bila CANDRA sedang tidak berjalan.
 - Hak konten: opsi **"Sumber publik — saya yang bertanggung jawab"** (tercatat apa adanya di jejak audit; tidak dianggap izin supplier).
+
+## v0.12.0
+- **Kunci Gemini**: format baru `AQ.…` (memuat titik) kini diterima; spasi/kutip/awalan `GEMINI_API_KEY=` otomatis dibersihkan; pesan galat menyebut penyebabnya.
+- **Kuota Gemini (AI_HTTP_429)**: jeda ±4 detik antar panggilan; bila kuota satu model habis, otomatis mencoba model lain (kuota gratis dihitung per model) sebelum berhenti dengan penjelasan.
+- **AI Optimize & Reset judul marketplace**: tiap produk ditampilkan ASLI (atas) vs HASIL GEMINI (bawah, bisa diedit) dengan persen kemiripan; Anda mencentang yang dipakai. Prompt melarang mengarang; server memvalidasi angka/fakta/kontak.
+- **Collection Settings**: kotak "Tambahkan biaya platform otomatis" — harga jual = modal + markup Anda + semua biaya platform (profil biaya marketplace tujuan, toko non-Mall). Tombol "Biaya platform (unggah file tarif)": Gemini membaca csv/xlsx/txt/html/pdf/gambar tarif terbaru; angka yang tidak ada di berkas teks dibuang; Anda tinjau lalu Simpan.
+- **Harga manual**: ikon ✎ di samping harga rekomendasi (mengalahkan aturan harga & biaya platform).
+- **Olah gambar**: perbaikan produk bertanda "Sumber publik" yang sebelumnya dilewati; opsi deteksi tulisan lewat Gemini bila tesseract tidak ada; tombol setujui massal foto yang belum diperiksa.
+- **Analisis & Bersihkan**: saran merek/toko di awal judul (klik untuk memasukkan ke kolom), ringkasan tidak lagi "undefined".
+- **Manage Tools → Kategori**: impor dari berkas unduhan marketplace (.xlsx/.csv/.tsv/.txt; format pohon id+parent atau kolom level dikenali otomatis).
+- Tampilan: tautan nama produk berwarna terang; kotak peringatan kuning diganti warna lembut.

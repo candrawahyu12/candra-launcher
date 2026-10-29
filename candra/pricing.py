@@ -30,6 +30,7 @@ class PriceRule:
     commission_pct: float = 0.0  # untuk mode margin & simulasi (isi dari tarif terbaru yang diverifikasi pengguna)
     margin_pct: float = 0.0
     fixed_cost: float = 0.0
+    fee_aware: bool = False  # True: harga = modal + markup Anda + SEMUA biaya platform marketplace (profil biaya), dihitung saat upload
 
     @classmethod
     def from_dict(cls, d: Optional[dict]) -> "PriceRule":

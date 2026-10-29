@@ -70,6 +70,58 @@ def parse_category_csv(text: str) -> list[tuple[str, str]]:
     return rows
 
 
+_ID_HDR = ("category_id", "category id", "id kategori", "kategori id", "cat_id", "catid", "id")
+_PARENT_HDR = ("parent_id", "parent id", "parent", "id induk", "induk")
+_NAME_HDR = ("category_name", "category name", "nama kategori", "name", "nama", "display_name", "category")
+
+
+def parse_category_rows(rows: list[list[str]]) -> list[tuple[str, str]]:
+    """Tabel mentah (dari .xlsx atau CSV tak standar) -> (id, path). Mendukung: (a) kolom id + parent_id + nama (pohon), (b) id + kolom level
+    1..n, (c) baris dengan id angka di 3 kolom pertama lalu teks kategori. Baris tanpa id angka dilewati."""
+    rows = [[str(c).strip() for c in r] for r in rows if any(str(c).strip() for c in r)]
+    hdr_i, ic, pc, nc = None, None, None, None
+    for i, r in enumerate(rows[:8]):
+        low = [c.lower() for c in r]
+        ic_ = next((j for j, c in enumerate(low) if c in _ID_HDR), None)
+        pc_ = next((j for j, c in enumerate(low) if c in _PARENT_HDR), None)
+        nc_ = next((j for j, c in enumerate(low) if c in _NAME_HDR and j != ic_), None)
+        if ic_ is not None and pc_ is not None and nc_ is not None:
+            hdr_i, ic, pc, nc = i, ic_, pc_, nc_
+            break
+    out: list[tuple[str, str]] = []
+    if hdr_i is not None:  # pohon: susun path dari rantai induk
+        names, parent = {}, {}
+        for r in rows[hdr_i + 1:]:
+            if len(r) <= max(ic, pc, nc) or not r[ic]:
+                continue
+            names[r[ic]], parent[r[ic]] = r[nc], r[pc] if r[pc] not in ("0", "") else ""
+        has_child = set(parent.values())
+        for cid in names:
+            if cid in has_child:  # hanya kategori daun yang dipakai untuk upload
+                continue
+            chain, cur, guard = [], cid, 0
+            while cur and cur in names and guard < 8:
+                chain.append(names[cur]); cur = parent.get(cur, ""); guard += 1
+            path = " > ".join(reversed(chain))
+            if path and len(cid) <= 40 and len(path) <= 300:
+                out.append((cid, path))
+        return out
+    for r in rows:
+        idx = next((j for j, c in enumerate(r[:3]) if re.fullmatch(r"\d{3,12}", c)), None)
+        if idx is None:
+            continue
+        cid = r[idx]
+        parts: list[str] = []
+        for j, c in enumerate(r):
+            if j == idx or not c or re.fullmatch(r"[\d.,\s]+", c):
+                continue
+            parts += [x.strip() for x in re.split(r"\s*>\s*", c) if x.strip()]
+        path = " > ".join(parts)
+        if path and len(path) <= 300:
+            out.append((cid, path))
+    return out
+
+
 def _match(q: str, t: str) -> bool:
     return q == t or (len(q) >= 4 and len(t) >= 4 and (q.startswith(t) or t.startswith(q)))
 

@@ -879,3 +879,289 @@ class SelfResponsibleRightsTests(unittest.TestCase):
             svc.jobs  # noqa: B018
             svc.create_scrape_job(source_platform="csv_feed", input_mode="csv", inputs={"csv_text": SAMPLE},
                                   collection_name="K2", rights_declaration="bogus")
+
+
+def _gem(reply_text):
+    return {"candidates": [{"content": {"parts": [{"text": reply_text}]}}]}
+
+
+class GeminiKeyAndQuotaTests(unittest.TestCase):
+    def test_new_aq_key_format_and_paste_cleanup(self):
+        import server
+        for good in ("AQ.Ab8RN6IxampleKeyWithDot_1234567890-abc", "AIzaSyD-1234567890abcdefghijklmnopqrstu"):
+            self.assertTrue(server.KEY_RE.match(server.clean_key_input(good)), good)
+        self.assertEqual(server.clean_key_input('  "GEMINI_API_KEY=AQ.abcdefghijklmnopqrstuvwxyz1234"\n'), "AQ.abcdefghijklmnopqrstuvwxyz1234")
+        self.assertEqual(server.clean_key_input("Bearer AQ.abcdefghijklmnopqrstuvwxyz1234"), "AQ.abcdefghijklmnopqrstuvwxyz1234")
+        for bad in ("pendek", "ada spasi di tengah kuncinya 1234567890", "a;rm -rf /1234567890123456789"):
+            self.assertFalse(server.KEY_RE.match(server.clean_key_input(bad)), bad)
+
+    def test_quota_429_falls_back_to_other_model_then_explains(self):
+        from candra.optimizer import GeminiProvider
+        os.environ["GEMINI_API_KEY"] = "AQ.dummy_key_for_tests_1234567890"
+        try:
+            seen = []
+
+            def tr(url, headers, body):
+                seen.append(url)
+                if "gemini-2.5-flash:" in url:
+                    raise ValueError("AI_HTTP_429: You exceeded your current quota")
+                return _gem('{"ok": 1}')
+            g = GeminiProvider(transport=tr, sleep=lambda s: None)
+            self.assertEqual(g.complete("x"), '{"ok": 1}')
+            self.assertIn("lite", g.model)                       # pindah ke model lain yang kuotanya terpisah
+            def tr_all(url, headers, body):
+                raise ValueError("AI_HTTP_429: quota")
+            g2 = GeminiProvider(transport=tr_all, sleep=lambda s: None)
+            with self.assertRaises(ValueError) as cm:
+                g2.complete("x")
+            self.assertIn("kuota Gemini habis", str(cm.exception)); self.assertIn("gemini-2.5-flash-lite", str(cm.exception))
+        finally:
+            os.environ.pop("GEMINI_API_KEY", None)
+
+    def test_pacing_between_calls_when_real_transport(self):
+        from candra.optimizer import GeminiProvider
+        os.environ["GEMINI_API_KEY"] = "AQ.dummy_key_for_tests_1234567890"
+        try:
+            waits = []
+            g = GeminiProvider(min_interval=4.0, sleep=waits.append)
+            g.transport = lambda u, h, b: _gem("{}")
+            g.complete("a"); g.complete("b")
+            self.assertTrue(waits and 0 < waits[0] <= 4.0)
+        finally:
+            os.environ.pop("GEMINI_API_KEY", None)
+
+
+class AiCompareAndFeeFileTests(unittest.TestCase):
+    def setUp(self):
+        os.environ["GEMINI_API_KEY"] = "AQ.dummy_key_for_tests_1234567890"
+        self.svc = make_svc()
+        self.svc.create_scrape_job(source_platform="csv_feed", input_mode="csv", inputs={"csv_text": SAMPLE}, collection_name="K",
+                                   rights_declaration="self_responsible"); self.svc.jobs.run_pending()
+        self.col = self.svc.db.one("SELECT id FROM collections")["id"]
+        self.pid = self.svc.db.one("SELECT id FROM products WHERE title_original LIKE 'Celana%'")["id"]
+        self.svc.provider = self.svc.providers["gemini"]
+
+    def tearDown(self):
+        os.environ.pop("GEMINI_API_KEY", None)
+
+    def test_optimize_one_returns_original_and_ai_side_by_side_without_changing_data(self):
+        row = self.svc.db.one("SELECT title_original, description_original FROM products WHERE id=?", (self.pid,))
+        reply = json.dumps({"title": "Chino Pria Slim Fit Stretch Panjang", "description": "Celana chino pria bahan twill stretch."})
+        self.svc.providers["gemini"].transport = lambda u, h, b: _gem(reply)
+        r = self.svc.optimize_one(self.col, self.pid, [], 100)
+        self.assertEqual(r["before"]["title"], row["title_original"])
+        self.assertEqual(r["after"]["title"], "Chino Pria Slim Fit Stretch Panjang")
+        self.assertLess(r["similarity"]["title"], 1.0)
+        self.assertEqual(self.svc.db.one("SELECT title_edited FROM products WHERE id=?", (self.pid,))["title_edited"], None)  # usulan saja
+        with self.assertRaises(ServiceError):
+            self.svc.optimize_one(self.col, 999999)
+
+    def test_optimize_one_flags_invented_numbers(self):
+        reply = json.dumps({"title": "Chino Pria 99 Pcs Anti Karat", "description": "Garansi 10 tahun"})
+        self.svc.providers["gemini"].transport = lambda u, h, b: _gem(reply)
+        r = self.svc.optimize_one(self.col, self.pid, [], 100)
+        self.assertTrue(r["errors"])                       # angka baru ditandai -> UI tidak mencentang otomatis
+
+    def test_fee_file_from_text_verifies_numbers_against_file(self):
+        txt = "Biaya Administrasi (toko non-Star) 8%\nBiaya Proses Pesanan Rp1.250 per pesanan\nProgram Gratis Ongkir 4,5%"
+        reply = json.dumps({"komponen": [
+            {"name": "Biaya Administrasi", "kind": "percent", "value": 8, "cap": None, "dynamic": True, "note": ""},
+            {"name": "Biaya Proses Pesanan", "kind": "fixed", "value": 1250, "cap": None, "dynamic": False, "note": ""},
+            {"name": "Biaya Karangan", "kind": "percent", "value": 7.77, "cap": None, "dynamic": False, "note": ""}],
+            "overrides": [], "tanggal_data": "2026-10", "catatan": ""})
+        self.svc.providers["gemini"].transport = lambda u, h, b: _gem(reply)
+        r = self.svc.fees_from_file("shopee", "tarif.txt", txt.encode())
+        names = [c["name"] for c in r["suggestion"]["components"]]
+        self.assertEqual(names, ["Biaya Administrasi", "Biaya Proses Pesanan"])      # angka 7.77 tidak ada di berkas -> dibuang
+        self.assertTrue(any("Karangan" in d for d in r["suggestion"]["dropped"]))
+        self.assertTrue(r["suggestion"]["numbersVerified"])
+        self.assertEqual(self.svc.get_fee_profile("shopee")["customized"], False)     # belum menyimpan apa pun
+        os.environ.pop("GEMINI_API_KEY")
+        with self.assertRaises(ServiceError):
+            self.svc.fees_from_file("shopee", "x.txt", b"8%")
+
+    def test_fee_file_pdf_goes_inline_and_xls_rejected(self):
+        seen = {}
+
+        def tr(u, h, b):
+            seen["parts"] = b["contents"][0]["parts"]
+            return _gem(json.dumps({"komponen": [{"name": "Komisi", "kind": "percent", "value": 6, "cap": None, "dynamic": True, "note": ""}], "overrides": []}))
+        self.svc.providers["gemini"].transport = tr
+        r = self.svc.fees_from_file("tiktok", "tarif.pdf", b"%PDF-1.4 fake")
+        self.assertIn("inlineData", seen["parts"][1]); self.assertFalse(r["suggestion"]["numbersVerified"])
+        with self.assertRaises(ServiceError):
+            self.svc.fees_from_file("tiktok", "tarif.xls", b"x")
+
+
+class FeeAwarePricingTests(unittest.TestCase):
+    def setUp(self):
+        self.svc = make_svc()
+        self.svc.create_scrape_job(source_platform="csv_feed", input_mode="csv", inputs={"csv_text": SAMPLE}, collection_name="K",
+                                   rights_declaration="self_responsible"); self.svc.jobs.run_pending()
+        self.col = self.svc.db.one("SELECT id FROM collections")["id"]
+        self.pid = self.svc.db.one("SELECT id FROM products WHERE title_original LIKE 'Celana%'")["id"]
+        self.svc.set_category_mapping("csv_feed", "Fashion Pria", "shopee", "100", "Fashion Pria")
+        self.svc.set_category_mapping("csv_feed", "Tas Pria", "shopee", "101", "Tas Pria")
+
+    def _price(self, rule, **kw):
+        from candra.uploader import build_payload, _validate_config
+        cfg = _validate_config({"marketplace": "shopee", "price_rule": rule, **kw}, "sandbox")
+        return build_payload(self.svc.db, self.pid, "sandbox", cfg)
+
+    def test_fee_aware_covers_markup_after_all_fees(self):
+        cost = self.svc.db.one("SELECT price_original FROM products WHERE id=?", (self.pid,))["price_original"]
+        plain = self._price({"mode": "percent", "percent": 20})
+        aware = self._price({"mode": "percent", "percent": 20, "fee_aware": True})
+        p_plain, p_aware = plain["payload"]["variants"][0]["price"], aware["payload"]["variants"][0]["price"]
+        self.assertGreater(p_aware, p_plain)                              # biaya platform ditambahkan di atas markup
+        sim = aware["prices"][0]
+        self.assertGreaterEqual(sim["profit"], cost * 0.20 - 1)           # laba bersih >= markup 20% yang Anda isi
+        self.assertFalse(sim["below_cost"])
+
+    def test_manual_price_override_beats_fee_aware(self):
+        r = self.svc.set_product_price(self.col, self.pid, "shopee", 250000)
+        self.assertEqual(r["price"], 250000)
+        out = self._price({"mode": "percent", "percent": 20, "fee_aware": True})
+        self.assertEqual(max(v["price"] for v in out["payload"]["variants"]), 250000)
+        self.assertEqual(self.svc.set_product_price(self.col, self.pid, "shopee", None)["cleared"] > 0, True)
+        with self.assertRaises(ServiceError):
+            self.svc.set_product_price(self.col, self.pid, "shopee", 5)
+        with self.assertRaises(ServiceError):
+            self.svc.set_product_price(self.col, self.pid, "bukalapak", 5000)
+
+    def test_unknown_marketplace_profile_is_error_not_guess(self):
+        out = self._price({"mode": "percent", "percent": 20, "fee_aware": True}, marketplace="lazada")
+        self.assertIn("FEE_PROFILE_MISSING", out["errors"])
+
+    def test_saved_profile_changes_price(self):
+        base = self._price({"mode": "percent", "percent": 20, "fee_aware": True})["payload"]["variants"][0]["price"]
+        self.svc.set_fee_profile("shopee", [{"name": "Komisi", "kind": "percent", "value": 20, "cap": None, "dynamic": False, "enabled": True}], [], True)
+        hi = self._price({"mode": "percent", "percent": 20, "fee_aware": True})["payload"]["variants"][0]["price"]
+        self.assertGreater(hi, base)
+
+
+def _make_xlsx(rows):
+    import io, zipfile
+    from xml.sax.saxutils import escape
+    ss, xml_rows = [], []
+    for ri, r in enumerate(rows, 1):
+        cells = []
+        for ci, v in enumerate(r):
+            col = chr(65 + ci)
+            if isinstance(v, (int, float)):
+                cells.append(f'<c r="{col}{ri}"><v>{v}</v></c>')
+            else:
+                ss.append(str(v)); cells.append(f'<c r="{col}{ri}" t="s"><v>{len(ss) - 1}</v></c>')
+        xml_rows.append(f'<row r="{ri}">{"".join(cells)}</row>')
+    ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"'
+    b = io.BytesIO()
+    with zipfile.ZipFile(b, "w") as z:
+        z.writestr("xl/sharedStrings.xml", f'<sst {ns}>' + "".join(f"<si><t>{escape(s)}</t></si>" for s in ss) + "</sst>")
+        z.writestr("xl/worksheets/sheet1.xml", f'<worksheet {ns}><sheetData>{"".join(xml_rows)}</sheetData></worksheet>')
+    return b.getvalue()
+
+
+class CategoryFileImportTests(unittest.TestCase):
+    def setUp(self):
+        self.svc = make_svc()
+
+    def test_xlsx_tree_with_parent_ids(self):
+        data = _make_xlsx([["category_id", "parent_id", "category_name"], [100, 0, "Fashion Pria"], [101, 100, "Atasan"], [102, 101, "Kaos"], [103, 100, "Celana"]])
+        r = self.svc.import_categories_file("shopee", "kategori.xlsx", data)
+        self.assertEqual(r["imported"], 2)                                  # hanya kategori daun
+        paths = {x["path"] for x in self.svc.db.query("SELECT path FROM marketplace_categories WHERE marketplace='shopee'")}
+        self.assertEqual(paths, {"Fashion Pria > Atasan > Kaos", "Fashion Pria > Celana"})
+
+    def test_xlsx_flat_levels_and_csv_and_rejections(self):
+        data = _make_xlsx([["ID", "Level 1", "Level 2", "Level 3"], [555001, "Elektronik", "Audio", "Headset"], [555002, "Rumah", "Dapur", "Panci"]])
+        self.assertEqual(self.svc.import_categories_file("tokopedia", "k.xlsx", data)["imported"], 2)
+        csv_ = "id,path\n100,Fashion Pria > Kaos\n200,Tas Pria > Ransel\n".encode()
+        self.assertEqual(self.svc.import_categories_file("tiktok", "k.csv", csv_)["imported"], 2)
+        for fn, raw in (("k.pdf", b"%PDF"), ("k.xls", b"x"), ("k.xlsx", b"bukan zip"), ("k.csv", b"abc\ndef\n")):
+            with self.assertRaises(ServiceError):
+                self.svc.import_categories_file("shopee", fn, raw)
+        with self.assertRaises(ServiceError):
+            self.svc.import_categories_file("lazada", "k.csv", csv_)
+        self.assertEqual(self.svc.category_list_info().get("tiktok"), 2)
+
+
+class ImageGeminiOcrTests(unittest.TestCase):
+    def test_gemini_ocr_flags_shop_text_and_bulk_approve_unchecked(self):
+        os.environ["GEMINI_API_KEY"] = "AQ.dummy_key_for_tests_1234567890"
+        try:
+            svc = make_svc(image_fetch=lambda u: _jpeg(900, 900))
+            svc.create_scrape_job(source_platform="csv_feed", input_mode="csv", inputs={"csv_text": SAMPLE}, collection_name="K",
+                                  rights_declaration="self_responsible"); svc.jobs.run_pending()
+            col = svc.db.one("SELECT id FROM collections")["id"]
+            import candra.images as imgmod
+            orig = imgmod.ocr_available
+            orig_t = imgmod._tesseract
+            imgmod.ocr_available = lambda: False          # simulasikan PC Anda: tesseract tidak terpasang
+            imgmod._tesseract = lambda path: None
+            svc.providers["gemini"].min_interval = 0.0
+            try:
+                    svc.providers["gemini"].transport = lambda u, h, b: _gem(json.dumps({"teks": "Toko Maju Jaya WA 0812-3456-7890 Shopee"}))
+                    r = svc.process_images(col, "shopee", gemini_ocr=True)
+                    self.assertGreater(r["counts"].get("REVIEW", 0), 0)
+                    self.assertTrue(r["geminiOcrUsed"])
+                    svc.providers["gemini"].transport = lambda u, h, b: _gem(json.dumps({"teks": ""}))
+                    r2 = svc.process_images(col, "shopee", force=True, gemini_ocr=True)
+                    self.assertEqual(r2["counts"].get("REVIEW", 0), 0)
+                    r3 = svc.process_images(col, "shopee", force=True)           # tanpa OCR -> UNCHECKED
+                    self.assertGreater(r3["counts"].get("UNCHECKED", 0), 0)
+                    self.assertGreater(svc.approve_unchecked(col, "shopee")["approved"], 0)
+            finally:
+                imgmod.ocr_available = orig
+                imgmod._tesseract = orig_t
+        finally:
+            os.environ.pop("GEMINI_API_KEY", None)
+
+
+class AnalyzeBrandTests(unittest.TestCase):
+    def test_brand_candidates_and_analyze_shape(self):
+        from candra.analyzer import brand_candidates
+        titles = ["Oxide Alat Semprot Cuci Motor", "Oxide Penghitam Body Motor", "YEEXi Pressure Sprayer 2L", "Alat Pompa Air Jet", "[KUNING] Semprotan Kuning", "VICTOR Pressure Sprayer"]
+        words = {b["word"]: b["count"] for b in brand_candidates(titles)}
+        self.assertEqual(words.get("Oxide"), 2); self.assertIn("YEEXi", words); self.assertIn("VICTOR", words)
+        self.assertNotIn("Alat", words); self.assertNotIn("KUNING", words)
+        svc = make_svc()
+        svc.create_scrape_job(source_platform="csv_feed", input_mode="csv", inputs={"csv_text": SAMPLE}, collection_name="K", rights_declaration="own"); svc.jobs.run_pending()
+        col = svc.db.one("SELECT id FROM collections")["id"]
+        r = svc.analyze_collection(col, [])
+        for k in ("noImage", "noCategory", "invalidPrice", "zeroStock", "rightsUnverified"):
+            self.assertIn("count", r["problems"][k])         # UI membaca .count (dulu 'undefined')
+        self.assertIn("brandCandidates", r)
+
+
+class PriceAdviceFeeAwareTests(unittest.TestCase):
+    def test_price_now_matches_upload_price_when_fee_aware(self):
+        svc = make_svc()
+        svc.create_scrape_job(source_platform="csv_feed", input_mode="csv", inputs={"csv_text": SAMPLE}, collection_name="K", rights_declaration="own"); svc.jobs.run_pending()
+        col = svc.db.one("SELECT id FROM collections")["id"]
+        svc.set_collection_settings(col, {"price_rule": {"mode": "percent", "percent": 20, "fee_aware": True, "round_step": 100}})
+        adv = svc.price_advice(col, marketplace="shopee")
+        self.assertTrue(adv["ruleSet"])
+        pid = svc.db.one("SELECT id FROM products WHERE title_original LIKE 'Celana%'")["id"]
+        row = next(i for i in adv["items"] if i["id"] == pid)
+        self.assertEqual(row["priceSource"], "aturan + biaya platform")
+        from candra.uploader import build_payload, _validate_config
+        cfg = _validate_config({"marketplace": "shopee", "price_rule": {"mode": "percent", "percent": 20, "fee_aware": True, "round_step": 100}}, "sandbox")
+        up = build_payload(svc.db, pid, "sandbox", cfg)["payload"]["variants"]
+        self.assertEqual(row["priceNow"], max(v["price"] for v in up))
+        self.assertNotEqual(row["verdict"], "RUGI")
+
+
+class BrandCleanTests(unittest.TestCase):
+    def test_brand_removed_from_titles_when_chosen_originals_kept(self):
+        svc = make_svc()
+        csv_ = "id,judul,deskripsi,harga,stok,kategori,gambar\nA1,Oxide Alat Semprot Cuci Motor 2 Liter,,Rp 87.150,10,Otomotif,https://img.example.com/a.jpg\n"
+        svc.create_scrape_job(source_platform="csv_feed", input_mode="csv", inputs={"csv_text": csv_}, collection_name="K", rights_declaration="own"); svc.jobs.run_pending()
+        col = svc.db.one("SELECT id FROM collections")["id"]
+        a = svc.analyze_collection(col, ["Oxide"])
+        self.assertGreater(a["totals"].get("shop_name", 0), 0)
+        self.assertEqual(a["brandCandidates"][0]["word"], "Oxide")
+        r = svc.clean_products(col, ["shop_name"], None, ["Oxide"])
+        self.assertEqual(r["changed"], 1)
+        row = svc.db.one("SELECT title_original, title_edited FROM products")
+        self.assertNotIn("oxide", row["title_edited"].lower()); self.assertIn("2 Liter", row["title_edited"])
+        self.assertIn("Oxide", row["title_original"])

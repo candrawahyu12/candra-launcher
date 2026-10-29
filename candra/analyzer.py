@@ -154,3 +154,33 @@ def supplier_data_found(text: str, shop_names=()) -> list[str]:
     """Jenis data supplier/marketplace yang masih ada di teks (kosong = bersih)."""
     res = analyze_text(text or "", shop_names)
     return sorted(k for k in res["counts"] if k in SUPPLIER_KINDS or k == "shop_name")
+
+
+_GENERIC = set("""alat alat2 paket set kepala pompa sprayer semprotan semprot botol spray air tas baju kaos kemeja celana jaket sepatu sandal topi jam
+kabel charger casing case cover tempat rak lampu led mini portable manual otomatis elektrik listrik baterai kipas mesin pisau gunting panci wajan
+piring gelas mangkuk sendok garpu box kotak dompet ikat pinggang kacamata masker sarung tangan kaus kaki handuk selimut bantal sprei seprai gorden
+karpet keset mainan boneka buku pulpen pensil penghapus tali selang kran keran stiker sticker pelindung pembersih penghilang pewangi parfum sabun
+sampo shampoo cairan obat vitamin suplemen kopi teh susu biskuit kue snack makanan minuman bumbu garam gula minyak beras tepung bibit pupuk media
+tanaman bunga pot vas hiasan dekorasi kain bahan benang jarum payung jas hujan helm sarung motor mobil sepeda lap kanebo microfiber cuci cleaner
+original ori murah grosir promo terlaru terbaru termurah hot sale baru new best premium super jumbo besar kecil mini ukuran warna kuning merah biru
+hijau hitam putih abu coklat pink ungu orange oranye multifungsi serbaguna anti tahan air tekanan tinggi high pressure the for and with untuk dan
+dengan isi pcs pack liter ltr ml gram kg cm mm""".split())
+
+
+def brand_candidates(titles: Iterable[str], limit: int = 12) -> list[dict]:
+    """Kemungkinan nama merek/toko supplier di awal judul (kata pertama yang bukan kata umum). HANYA saran: pengguna yang memilih."""
+    counts: Counter = Counter()
+    example: dict[str, str] = {}
+    for t in titles:
+        words = re.findall(r"[A-Za-z0-9][A-Za-z0-9.&'\-]{1,24}", re.sub(r"^[\s\[\(\{【]+", "", t or ""))
+        if not words:
+            continue
+        w = words[0]
+        wl = w.lower().strip(".-")
+        if len(wl) < 3 or wl.isdigit() or wl in _GENERIC or not any(c.isalpha() for c in wl):
+            continue
+        if not (w[0].isupper() or w.isupper()):
+            continue
+        counts[w] += 1
+        example.setdefault(w, (t or "")[:70])
+    return [{"word": w, "count": n, "example": example[w]} for w, n in counts.most_common(limit)]

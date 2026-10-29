@@ -19,6 +19,7 @@ from .attributes import extract as extract_attrs
 from .db import DB
 from .exporter import export_csv, load_template
 from .policy import NO_BRAND, enforce
+from . import fees as feemod
 from .pricing import PriceRule, PricingError, compute_price, decorate_description, decorate_title, simulate
 from .util import now, redact, sha256
 
@@ -220,6 +221,14 @@ def _validate_config(cfg: dict, target: str) -> dict:
     return out
 
 
+def load_fee_profile(db: DB, marketplace: str) -> Optional[dict]:
+    """Profil biaya marketplace: yang Anda simpan di Biaya Platform, atau bawaan (DRAFT_UNVERIFIED) bila belum pernah disimpan."""
+    r = db.one("SELECT value FROM app_settings WHERE key=?", ("fees:" + marketplace,))
+    if r and r["value"]:
+        return json.loads(r["value"])
+    return feemod.DEFAULT_PROFILES.get(marketplace)
+
+
 def build_payload(db: DB, product_id: int, target: str, cfg: dict, index: int = 0) -> dict:
     """Return {'payload','errors','warnings','prices'}; tidak menulis apa pun."""
     p = db.one("SELECT * FROM products WHERE id=?", (product_id,))
@@ -229,6 +238,11 @@ def build_payload(db: DB, product_id: int, target: str, cfg: dict, index: int = 
     images = db.query("SELECT * FROM product_images WHERE product_id=? ORDER BY sort_order", (product_id,))
     errors, warnings, prices = [], [], []
     rule = PriceRule.from_dict(cfg["price_rule"])
+    fee_prof = None
+    if rule.fee_aware:
+        fee_prof = load_fee_profile(db, cfg.get("marketplace") or target)
+        if not fee_prof:
+            errors.append("FEE_PROFILE_MISSING")
 
     title = (p["title_edited"] or p["title_original"] or "").strip()
     desc = (p["description_edited"] if p["description_edited"] is not None else p["description_original"]) or ""
@@ -313,10 +327,23 @@ def build_payload(db: DB, product_id: int, target: str, cfg: dict, index: int = 
         try:
             ov = db.one("SELECT price FROM price_overrides WHERE product_id=? AND variant_id=? ORDER BY updated_at DESC LIMIT 1",
                         (product_id, v.get("id") or 0))
-            price = int(ov["price"]) if ov else compute_price(v["price_original"], rule)  # harga rekomendasi yang Anda terapkan menang atas aturan harga
-            sim = simulate(v["price_original"], price, rule.commission_pct, rule.fixed_cost)
+            if ov:
+                price = int(ov["price"])  # harga manual / rekomendasi yang Anda terapkan menang atas aturan harga
+                sim = simulate(v["price_original"], price, rule.commission_pct, rule.fixed_cost)
+            elif fee_prof:
+                cat_text = " ".join(x for x in ((category or {}).get("label", ""), p["source_category_path"] or "", title) if x)
+                r0 = PriceRule.from_dict({**rule.__dict__, "round_step": 0, "fee_aware": False})  # markup Anda = laba bersih yang diinginkan
+                markup = compute_price(v["price_original"], r0) - int(round(float(v["price_original"])))
+                price = feemod.solve_price(v["price_original"], fee_prof["components"], fee_prof.get("overrides"), cat_text, 0.0, 0,
+                                           max(1, int(rule.round_step or 1)), max(0, markup))
+                np_ = feemod.net_profit(price, v["price_original"], fee_prof["components"], fee_prof.get("overrides"), cat_text)
+                sim = {"cost": float(v["price_original"]), "price": float(price), "fee": np_["total"], "profit": np_["profit"],
+                       "margin_pct": np_["marginPct"], "below_cost": np_["profit"] < 0}
+            else:
+                price = compute_price(v["price_original"], rule)
+                sim = simulate(v["price_original"], price, rule.commission_pct, rule.fixed_cost)
             prices.append({"sku": sku, **sim})
-        except (PricingError, TypeError) as e:
+        except (PricingError, TypeError, feemod.FeeError) as e:
             price = None
             errors.append(f"PRICE_ERROR:{e}")
         if stock is None:
