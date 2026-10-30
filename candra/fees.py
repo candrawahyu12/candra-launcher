@@ -93,7 +93,7 @@ def validate_overrides(ovs) -> list[dict]:
         if not kws or not 0 <= v <= 50:
             raise FeeError("override: keywords wajib dan value 0..50")
         out.append({"keywords": kws[:15], "value": v})
-    return out[:30]
+    return out[:1500]
 
 
 def _effective(comps: list[dict], overrides: list[dict], category_text: str) -> list[dict]:

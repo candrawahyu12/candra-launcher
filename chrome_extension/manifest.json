@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CANDRA Capture",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Kirim data produk yang tampil di halaman yang Anda buka sendiri ke aplikasi CANDRA di komputer Anda.",
   "permissions": [
     "storage",
@@ -30,6 +30,16 @@
       ],
       "js": [
         "content.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "http://127.0.0.1/*",
+        "http://localhost/*"
+      ],
+      "js": [
+        "relay.js"
       ],
       "run_at": "document_idle"
     }

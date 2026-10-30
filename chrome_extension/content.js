@@ -114,7 +114,11 @@
         const im = o.el.querySelector("img");
         if (im && (im.currentSrc || im.src)) swatch = bigImage(im.currentSrc || im.src);
       }
-      await sleep(R.click_delay_ms || 350);
+      {  // tunggu harga berubah (cepat bila sudah berubah), maksimal click_delay_ms
+        const before = currentPrice(), t0 = Date.now(), maxMs = R.click_delay_ms || 350;
+        await sleep(90);
+        while (Date.now() - t0 < maxMs && currentPrice() === before) await sleep(60);
+      }
       const sm = sr ? (document.body.innerText || "").match(sr) : null;
       out.push({ options, price: currentPrice(), stock: disabled ? 0 : (sm ? sm[1] : ""), image: swatch || mainImage() });
     }
@@ -207,7 +211,7 @@
       G.state = "running";
       if (pageReady(kind)) { if (++stable >= 2) return "ok"; } else stable = 0;
       setNote("memuat halaman...");
-      await sleep(900);
+      await sleep(450);
     }
     return seenGate ? "human" : "timeout";
   }
@@ -215,7 +219,7 @@
     let last = -1, still = 0;
     for (let i = 0; i < steps; i++) {
       window.scrollBy({ top: Math.round(innerHeight * 0.8), behavior: "smooth" });
-      await sleep(550);
+      await sleep(380);
       const h = document.documentElement.scrollHeight;
       if (shouldStop && shouldStop()) break;
       if (h === last && (innerHeight + scrollY) >= h - 4) { if (++still >= 2) break; } else still = 0;
@@ -226,8 +230,8 @@
     const r = await waitReady("detail", token);
     if (r !== "ok") return r === "cancel" ? null : { state: r === "human" ? "needs_human" : "failed", note: r === "human" ? "menunggu login/verifikasi terlalu lama" : "halaman produk tidak terbaca (waktu habis)" };
     setNote("membaca produk...");
-    await scrollThrough(6);
-    window.scrollTo({ top: 0, behavior: "smooth" }); await sleep(500);
+    await scrollThrough(4);
+    window.scrollTo({ top: 0, behavior: "smooth" }); await sleep(250);
     const d = extractDetail();
     const st = await new Promise(res => chrome.runtime.sendMessage({ type: "settings" }, x => res((x && x.result) || {})));
     if (st.deepVariants !== false && Object.keys(variantGroups()).length) {

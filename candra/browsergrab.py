@@ -13,7 +13,7 @@ from .db import DB
 from .util import now
 
 BROWSER_HOSTS = ("shopee.co.id", "tokopedia.com")
-MAX_LIST_PAGES = 8          # halaman daftar per URL (ekstensi menaikkan parameter page)
+MAX_LIST_PAGES = 30         # batas atas halaman daftar per URL (pengguna memilih jumlahnya di Grabber)
 STALE_MINUTES = 20          # item 'working' yang ditinggal (Chrome ditutup) dikembalikan ke antrean
 ACTIVE_JOB = ("waiting_browser", "running")
 
@@ -161,12 +161,17 @@ def enqueue_details(db: DB, job_id: int, urls: list[str], limit: int) -> int:
     return added
 
 
-def enqueue_next_page(db: DB, job_id: int, item_url: str, found: int, limit: int) -> bool:
+def captured_total(db: DB, job_id: int) -> int:
+    return db.one("SELECT COUNT(*) n FROM scrape_job_items WHERE job_id=?", (job_id,))["n"]
+
+
+def enqueue_next_page(db: DB, job_id: int, item_url: str, found: int, limit: int, max_pages: int = 1, have_override: Optional[int] = None) -> bool:
     """Daftar belum cukup & halaman tadi masih memberi produk -> antrekan halaman berikutnya (maks MAX_LIST_PAGES)."""
-    if found <= 0 or detail_total(db, job_id) >= limit:
+    if found <= 0 or (detail_total(db, job_id) if have_override is None else have_override) >= limit:
         return False
+    max_pages = max(1, min(int(max_pages or 1), MAX_LIST_PAGES))
     pages = db.one("SELECT COUNT(*) n FROM grab_queue WHERE job_id=? AND kind='list'", (job_id,))["n"]
-    if pages >= MAX_LIST_PAGES:
+    if pages >= max_pages:
         return False
     cur = current_page(item_url)
     host = host_of(item_url)

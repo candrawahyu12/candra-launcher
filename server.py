@@ -303,7 +303,7 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
                                         extra_cost=float(b.get("extraCost") or 0), use_ai_prices=bool(b.get("useAiPrices")),
                                         product_ids=b.get("productIds"), markup_fixed=float(b.get("markupFixed", 0) or 0))
             if path == "/api/fees/profile":
-                return svc.set_fee_profile(b.get("marketplace", ""), b.get("components"), b.get("overrides"), bool(b.get("verified")), b.get("source", ""), bool(b.get("aiResearched")))
+                return svc.set_fee_profile(b.get("marketplace", ""), b.get("components"), b.get("overrides"), bool(b.get("verified")), b.get("source", ""), bool(b.get("aiResearched")), b.get("fileInfo"))
             if path == "/api/fees/reset":
                 return svc.reset_fee_profile(b.get("marketplace", ""))
             if path == "/api/fees/from-file":
@@ -314,7 +314,7 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
                 except Exception:  # noqa: BLE001
                     raise ServiceError("berkas tidak terbaca (base64 rusak)")
                 return svc.fees_from_file(b.get("marketplace", ""), str(b.get("filename", "")), raw, b.get("text"),
-                                          str(b.get("sellerType") or "Non-Mall (Non-Star / reguler)"))
+                                          str(b.get("sellerType") or "Non-Mall (Non-Star / reguler)"), use_ai=bool(b.get("useAi")))
             if m := re.fullmatch(r"/api/collections/(\d+)/set-price", path):
                 pr = b.get("price")
                 return svc.set_product_price(int(m[1]), int(b["productId"]), b.get("marketplace", ""), None if pr in (None, "") else pr)

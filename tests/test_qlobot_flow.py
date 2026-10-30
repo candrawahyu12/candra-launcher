@@ -413,7 +413,7 @@ class ImageAndPriceTests(unittest.TestCase):
         self.svc.set_collection_settings(self.col, {"price_rule": {"percent": 40}})
         self.assertEqual(self.svc.price_advice(self.col, commission_pct=0, product_ids=[pid])["items"][0]["verdict"], "TANPA_PEMBANDING")
         self.svc.set_collection_settings(self.col, {"price_rule": {"percent": 0}})
-        self.assertEqual(self.svc.price_advice(self.col, commission_pct=10, product_ids=[pid])["items"][0]["verdict"], "HARGA_BELUM_DIATUR")  # tanpa aturan harga tidak dinilai rugi
+        self.assertEqual(self.svc.price_advice(self.col, commission_pct=10, product_ids=[pid])["items"][0]["verdict"], "REKOMENDASI_SIAP")  # tanpa aturan harga tidak dinilai rugi
         self.svc.set_collection_settings(self.col, {"price_rule": {"percent": 1}})
         self.assertEqual(self.svc.price_advice(self.col, commission_pct=10, product_ids=[pid])["items"][0]["verdict"], "RUGI")  # markup 1% < komisi 10%
         self.svc.set_collection_settings(self.col, {"price_rule": {"percent": 40}})
@@ -969,7 +969,7 @@ class AiCompareAndFeeFileTests(unittest.TestCase):
             {"name": "Biaya Karangan", "kind": "percent", "value": 7.77, "cap": None, "dynamic": False, "note": ""}],
             "overrides": [], "tanggal_data": "2026-10", "catatan": ""})
         self.svc.providers["gemini"].transport = lambda u, h, b: _gem(reply)
-        r = self.svc.fees_from_file("shopee", "tarif.txt", txt.encode())
+        r = self.svc.fees_from_file("shopee", "tarif.txt", txt.encode(), use_ai=True)
         names = [c["name"] for c in r["suggestion"]["components"]]
         self.assertEqual(names, ["Biaya Administrasi", "Biaya Proses Pesanan"])      # angka 7.77 tidak ada di berkas -> dibuang
         self.assertTrue(any("Karangan" in d for d in r["suggestion"]["dropped"]))

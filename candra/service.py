@@ -22,7 +22,7 @@ from .optimizer import AIProvider, GeminiProvider, gemini_search, RuleBasedProvi
 from .pricing import PriceRule, PricingError, compute_price, simulate
 from .uploader import (OK_RIGHTS, AssistedFillConnector, ExportFileConnector, OfficialApiConnector, SandboxConnector, UploadError, UploadManager,
                        build_payload, _validate_config)
-from . import filetext
+from . import feetable, filetext
 from . import images as imgmod
 from . import capture as capmod
 from . import fees as feemod
@@ -61,6 +61,7 @@ class CandraService:
         self.provider = provider or (self.providers["gemini"] if saved == "gemini" and GeminiProvider.key_configured()
                                      else self.providers["rule_based"])
         self.jobs = JobManager(self.db, self._adapter, resolver=resolver, sleep=sleep)
+        self.jobs.on_finish = self._auto_clean_job
         self.started_at = now()
         conns = {
             "export_csv": lambda cfg: ExportFileConnector(cfg.get("template", "generic"), self.export_dir),
@@ -91,6 +92,7 @@ class CandraService:
     def start_worker(self) -> None:
         self.jobs.recover()
         self.uploads.recover()
+        self.cleanup_history()
 
         def loop():
             while not self._stop.is_set():
@@ -127,7 +129,7 @@ class CandraService:
     def list_collections(self) -> list[dict]:
         return self.db.query(
             "SELECT c.id, c.name, c.description, c.created_at, c.status, (SELECT COUNT(*) FROM collection_products cp WHERE"
-            " cp.collection_id=c.id) products FROM collections c WHERE c.status<>'staging' ORDER BY c.id DESC")
+            " cp.collection_id=c.id) products FROM collections c WHERE c.status NOT IN ('staging','deleted') ORDER BY c.id DESC")
 
     def _need_collection(self, cid: int) -> dict:
         c = self.db.one("SELECT * FROM collections WHERE id=?", (cid,))
@@ -379,8 +381,27 @@ class CandraService:
                 "perProduct": per_product[:200], "duplicates": dups,
                 "problems": {k: {"count": len(v), "ids": v[:50]} for k, v in problems.items()}}
 
+    def _auto_clean_job(self, job_id: int) -> None:
+        """Hasil grab otomatis dibersihkan: merek/nama toko, sapaan toko, tag judul, nomor/link/akun, ajakan chat. Judul/deskripsi asli tetap tersimpan."""
+        job = self.db.one("SELECT collection_id FROM scrape_jobs WHERE id=?", (job_id,))
+        if job and job["collection_id"]:
+            self.auto_clean_collection(job["collection_id"])
+
+    def auto_clean_collection(self, collection_id: int) -> Optional[dict]:
+        """Hanya produk yang belum pernah Anda edit (judul/deskripsi edit manual tidak disentuh)."""
+        if not getattr(self, "auto_clean_enabled", True):
+            return None
+        try:
+            r = self.clean_products(collection_id, list(CLEANABLE), actor="auto-clean", auto_brands=True, only_unedited=True)
+            if r["changed"]:
+                self.db.event("system", collection_id, "info", "AUTO_CLEANED", f"{r['changed']} produk dibersihkan otomatis")
+            return r
+        except Exception:  # noqa: BLE001
+            return None
+
     def clean_products(self, collection_id: int, types: list[str], product_ids: Optional[list[int]] = None,
-                       shop_names: Optional[list[str]] = None, actor: str = "local", auto_brands: bool = True) -> dict:
+                       shop_names: Optional[list[str]] = None, actor: str = "local", auto_brands: bool = True,
+                       only_unedited: bool = False) -> dict:
         bad = set(types) - set(CLEANABLE)
         if bad:
             raise ServiceError(f"jenis tidak dikenal: {sorted(bad)}")
@@ -394,6 +415,8 @@ class CandraService:
         if "shop_name" in types:
             self._remember_shop_names(collection_id, names)  # supaya AI Optimize/Bulk/Upload ikut menolak merek ini
         for p in self._products_in(collection_id, product_ids):
+            if only_unedited and (p.get("title_edited") is not None or p.get("description_edited") is not None):
+                continue
             t, d = self._eff(p)
             nt, rt = clean_text(t, types, names, is_title=True)
             nd, rd = clean_text(d, types, names)
@@ -581,16 +604,26 @@ class CandraService:
             raise ServiceError(str(e))
         if info["kind"] == "inline":
             raise ServiceError("PDF/gambar tidak bisa dijadikan daftar kategori: unduh versi .xlsx atau .csv dari Seller Center")
-        rows: list[tuple[str, str]] = []
+        import csv as _csv, io as _io
+        cand: list[list[tuple[str, str]]] = []
+        raw: list[list[str]] = []
         if info["kind"] == "text":
             try:
-                rows = cats.parse_category_csv(info["text"])
+                cand.append(cats.parse_category_csv(info["text"]))
             except ValueError:
-                rows = []
-        if not rows:
-            raw = info["rows"] if info["kind"] == "rows" else [r for r in __import__("csv").reader(
-                __import__("io").StringIO(info["text"]), delimiter="\t" if "\t" in info["text"][:2000] else ",")]
-            rows = cats.parse_category_rows(raw)
+                pass
+            t = info["text"]
+            for d in ("\t", ";", ","):
+                if t[:4000].count(d) >= 2:
+                    raw = [r for r in _csv.reader(_io.StringIO(t), delimiter=d)]
+                    break
+            else:
+                raw = [[ln] for ln in t.splitlines()]
+        else:
+            raw = info["rows"]
+        cand.append(cats.parse_category_rows(raw))
+        rows = max(cand, key=len)  # pakai pembaca yang menemukan kategori terbanyak
+        preview = [[str(c)[:40] for c in r[:8]] for r in raw if any(str(c).strip() for c in r)][:8]
         if not rows:
             raise ServiceError("tidak ada baris kategori yang dikenali di berkas (butuh kolom ID kategori + nama/jalur kategori)")
         if len(rows) > 50000:
@@ -600,7 +633,21 @@ class CandraService:
             c.execute("DELETE FROM marketplace_categories WHERE marketplace=?", (marketplace,))
             c.executemany("INSERT OR REPLACE INTO marketplace_categories(marketplace, category_id, path) VALUES(?,?,?)",
                           [(marketplace, i, p) for i, p in rows])
-        return {"marketplace": marketplace, "imported": len(rows), "sample": [p for _, p in rows[:3]]}
+        self._set_setting("catfile:" + marketplace, json.dumps({"name": (filename or "tempel")[:100], "at": now(), "count": len(rows),
+                                                              "sample": [f"{i} · {p}" for i, p in rows[:5]], "preview": preview}, ensure_ascii=False))
+        out = {"marketplace": marketplace, "imported": len(rows), "sample": [p for _, p in rows[:3]], "fileName": (filename or "")[:100]}
+        mapped = 0
+        for c in self.db.query("SELECT id FROM collections WHERE status NOT IN ('staging','deleted')"):
+            try:
+                r = self.auto_map_categories(c["id"], marketplace, False, True)
+                mapped += int(r.get("applied") or 0)
+            except Exception:  # noqa: BLE001 - pemetaan otomatis tidak boleh menggagalkan impor
+                continue
+        out["autoMapped"] = mapped
+        if len(rows) < 5:
+            out["warning"] = f"Hanya {len(rows)} kategori terbaca. Cek isi berkas (pratinjau di bawah); kolom ID kategori harus berisi angka dan nama/jalur kategori harus ada di baris yang sama."
+            out["preview"] = preview
+        return out
 
     def category_list_info(self) -> dict:
         return {r["marketplace"]: r["n"] for r in self.db.query("SELECT marketplace, COUNT(*) n FROM marketplace_categories GROUP BY marketplace")}
@@ -612,6 +659,17 @@ class CandraService:
             out.setdefault(r["marketplace"], {"categories": 0, "auto": 0, "ai": 0, "manual": 0})["categories"] = r["n"]
         for r in self.db.query("SELECT marketplace, origin, COUNT(*) n FROM product_categories GROUP BY marketplace, origin"):
             out.setdefault(r["marketplace"], {"categories": 0, "auto": 0, "ai": 0, "manual": 0})[r["origin"]] = r["n"]
+        for m in out:
+            raw = self._setting("catfile:" + m)
+            if raw:
+                try:
+                    out[m]["file"] = json.loads(raw)
+                except ValueError:
+                    pass
+            if m in self.FEE_MARKETS:
+                fi = self.get_fee_profile(m).get("fileInfo")
+                if fi:
+                    out[m]["feeFile"] = {"name": fi.get("name"), "at": fi.get("at"), "method": fi.get("method"), "items": len(fi.get("items") or [])}
         return out
 
     def search_categories(self, marketplace: str, q: str, limit: int = 20) -> list[dict]:
@@ -864,6 +922,7 @@ class CandraService:
         if remove_from_history:
             self.db.execute("UPDATE scrape_jobs SET archived=1 WHERE id=?", (job_id,))
         self.db.event("system", target, "info", "COLLECTION_SAVED", f"{n} produk -> '{name}'" + (" (digabung)" if merged else ""))
+        self.auto_clean_collection(target)
         return {"collectionId": target, "name": name, "products": n, "merged": merged}
 
     def archive_job(self, job_id: int) -> None:
@@ -888,8 +947,9 @@ class CandraService:
         c = self._need_collection(collection_id)
         try:
             self.db.execute("DELETE FROM collections WHERE id=?", (collection_id,))
-        except sqlite3.IntegrityError:
-            raise ServiceError("collection punya riwayat upload sehingga tidak bisa dihapus; kosongkan produknya bila perlu")
+        except sqlite3.IntegrityError:  # punya riwayat upload: sembunyikan dari daftar (riwayat audit tetap utuh)
+            self.db.execute("DELETE FROM collection_products WHERE collection_id=?", (collection_id,))
+            self.db.execute("UPDATE collections SET status='deleted', name=? WHERE id=?", (f"{c['name']} [dihapus #{collection_id}]"[:200], collection_id))
         self.db.event("system", collection_id, "info", "COLLECTION_DELETED", c["name"])
         return {"deleted": c["name"]}
 
@@ -996,6 +1056,18 @@ class CandraService:
         return {"provider": self.provider.name, "ok": r["applied"], "errors": r["errors"], "title": r["title"]}
 
     # ------------------------------------------------------------ Process Monitor
+    def cleanup_history(self) -> dict:
+        """Saat aplikasi dibuka lagi: riwayat proses yang SUDAH SELESAI dibersihkan dari Process Monitor. Proses yang belum selesai
+        (grab/upload yang terhenti karena PC mati/aplikasi ditutup) TIDAK dihapus; ia hanya berhenti dan bisa dilanjutkan (resume)."""
+        a = self.db.execute("UPDATE scrape_jobs SET archived=1 WHERE archived=0 AND status IN ('completed','completed_with_errors','cancelled')"
+                            " AND (collection_id IS NULL OR collection_id NOT IN (SELECT id FROM collections WHERE status='staging'))").rowcount
+        # batch yang ditinggal saat berjalan: jadikan PAUSED supaya tidak jalan sendiri tanpa Anda; lanjutkan lewat tombol
+        p = self.db.execute("UPDATE upload_batches SET status='PAUSED' WHERE archived=0 AND status IN ('QUEUED','PROCESSING')").rowcount
+        # preview yang tidak pernah dikonfirmasi tidak mengirim apa pun -> bukan proses yang berjalan
+        b = self.db.execute("UPDATE upload_batches SET archived=1 WHERE archived=0 AND status IN"
+                            " ('SUCCEEDED','CANCELLED','READY_FOR_PREVIEW','AWAITING_CONFIRMATION')").rowcount
+        return {"jobsArchived": a, "batchesArchived": b, "batchesPaused": p}
+
     def list_processes(self) -> list[dict]:
         out = []
         for j in self.db.query("SELECT id FROM scrape_jobs WHERE archived=0 ORDER BY id DESC LIMIT 60"):
@@ -1003,7 +1075,7 @@ class CandraService:
             out.append({"type": "grab", "id": st["jobId"], "title": f"Products Grabber #{st['jobId']}", "status": st["status"],
                         "active": st["status"] in ("queued", "running"), "target": st["attempted"],
                         "success": st["succeeded"], "failed": st["failed"], "skipped": st["skipped"], "createdAt": st["createdAt"]})
-        for b in self.db.query("SELECT id, status, created_at FROM upload_batches ORDER BY id DESC LIMIT 60"):
+        for b in self.db.query("SELECT id, status, created_at FROM upload_batches WHERE archived=0 ORDER BY id DESC LIMIT 60"):
             counts = {r["status"]: r["n"] for r in self.db.query(
                 "SELECT status, COUNT(*) n FROM upload_items WHERE batch_id=? GROUP BY status", (b["id"],))}
             real = {k: v for k, v in counts.items() if k not in ("INVALID", "SKIPPED_INVALID")}
@@ -1018,7 +1090,7 @@ class CandraService:
         procs = self.list_processes()
         return {"version": __version__, "python": sys.version.split()[0], "dbVersion": self.db.version,
                 "dataDir": os.path.abspath(self.data_dir), "running": sum(1 for p in procs if p["active"]),
-                "collections": self.db.one("SELECT COUNT(*) n FROM collections WHERE status<>'staging'")["n"],
+                "collections": self.db.one("SELECT COUNT(*) n FROM collections WHERE status NOT IN ('staging','deleted')")["n"],
                 "products": self.db.one("SELECT COUNT(*) n FROM products")["n"], "aiProvider": self.provider.name}
 
     def retry_failed_batch(self, batch_id: int) -> dict:
@@ -1076,7 +1148,10 @@ class CandraService:
         if state == "done" and q["kind"] == "list":
             cards = [c for c in (payload.get("cards") or []) if isinstance(c, dict)][:200]
             limit = int(q["limit_n"] or job["requested_limit"] or 100)
-            room = max(0, min(limit, job["requested_limit"] or limit) - bgrab.detail_total(self.db, job["id"]))
+            jopts = json.loads(job.get("options_json") or "{}") if isinstance(job, dict) else {}
+            fetch_details = jopts.get("fetch_details", True) is not False
+            have = bgrab.detail_total(self.db, job["id"]) if fetch_details else bgrab.captured_total(self.db, job["id"])
+            room = max(0, min(limit, job["requested_limit"] or limit) - have)
             kept = cards[:room] if room else []
             cap = {"saved": 0, "updated": 0, "unchanged": 0, "skipped": 0, "failed": []}
             for i in range(0, len(kept), capmod.MAX_ITEMS):
@@ -1096,12 +1171,15 @@ class CandraService:
                     continue
                 if not bgrab.filter_reason(p, filters):
                     urls.append(str(c.get("url", "")))
-            added = bgrab.enqueue_details(self.db, job["id"], urls, limit)
-            more = bgrab.enqueue_next_page(self.db, job["id"], q["url"], len(cards), limit)
+            added = bgrab.enqueue_details(self.db, job["id"], urls, limit) if fetch_details else 0
+            more = bgrab.enqueue_next_page(self.db, job["id"], q["url"], len(cards), limit, int(jopts.get("pages") or 1),
+                                           have_override=None if fetch_details else bgrab.captured_total(self.db, job["id"]))
             extra = {"cards": len(cards), "queuedDetails": added, "nextPage": more}
-            note = note or f"{len(cards)} kartu, {added} halaman produk diantrekan"
+            note = note or (f"{len(cards)} kartu, {added} halaman produk diantrekan" if fetch_details else f"{len(cards)} produk tersimpan (tanpa buka tiap produk)")
         self.db.execute("UPDATE grab_queue SET status=?, note=?, updated_at=? WHERE id=?", (state, note or None, now(), q["id"]))
         status = bgrab.refresh_job(self.db, job["id"])
+        if status in ("completed", "completed_with_errors") and job.get("collection_id"):
+            self.auto_clean_collection(job["collection_id"])
         if state != "done":
             self.db.event("scrape", job["id"], "warning", "QUEUE_" + state.upper(), f"{q['url'][:80]} - {note}")
         return {"ok": True, "jobStatus": status, **extra}
@@ -1581,13 +1659,20 @@ class CandraService:
         return feemod.DEFAULT_PROFILES[marketplace] | {"customized": False}
 
     def set_fee_profile(self, marketplace: str, components: list, overrides: Optional[list] = None, verified: bool = False,
-                        source: str = "", ai_researched: bool = False) -> dict:
+                        source: str = "", ai_researched: bool = False, file_info: Optional[dict] = None) -> dict:
         base = self.get_fee_profile(marketplace)
         try:
             prof = {"label": base["label"], "components": feemod.validate_components(components),
                     "overrides": feemod.validate_overrides(overrides if overrides is not None else base.get("overrides")),
                     "status": "VERIFIED_BY_USER" if verified else ("AI_RESEARCHED" if ai_researched else "DRAFT_UNVERIFIED"),
                     "source": (source or base.get("source", ""))[:500], "updatedAt": now()}
+            if isinstance(file_info, dict) and file_info.get("name"):
+                prof["fileInfo"] = {"name": str(file_info["name"])[:120], "at": now(), "method": str(file_info.get("method", ""))[:20],
+                                    "sellerType": str(file_info.get("sellerType", ""))[:60],
+                                    "items": [{"label": str(i.get("label", ""))[:80], "value": str(i.get("value", ""))[:40], "note": str(i.get("note", ""))[:160]}
+                                              for i in (file_info.get("items") or [])[:120] if isinstance(i, dict)]}
+            elif base.get("fileInfo"):
+                prof["fileInfo"] = base["fileInfo"]  # berkas yang pernah diunggah tetap tercatat saat tabel diedit manual
         except feemod.FeeError as e:
             raise ServiceError(str(e))
         self._set_setting("fees:" + marketplace, json.dumps(prof, ensure_ascii=False))
@@ -1617,16 +1702,15 @@ class CandraService:
                 "warning": "Usulan AI, belum diverifikasi. Cocokkan dengan Seller Center sebelum disimpan."}
 
     def fees_from_file(self, marketplace: str, filename: str, data: Optional[bytes], text: Optional[str] = None,
-                       seller_type: str = "Non-Mall (Non-Star / reguler)") -> dict:
-        """Gemini membaca berkas tarif terbaru (csv/txt/xlsx/html/pdf/gambar atau teks yang ditempel) dan mengusulkan komponen biaya.
-        Hanya USULAN untuk Anda tinjau; angka yang tidak ada di berkas teks dibuang. Tidak menyimpan apa pun."""
+                       seller_type: str = "Non-Mall (Non-Star / reguler)", use_ai: bool = False) -> dict:
+        """Baca berkas tarif (csv/tsv/txt/xlsx/html atau teks tempel). Bawaan TANPA AI: hanya angka yang tertulis di berkas
+        (rentang -> tertinggi; program opsional dimatikan). Gemini opsional (use_ai) dan wajib untuk PDF/gambar. Tidak menyimpan apa pun."""
         self.get_fee_profile(marketplace)
-        if not GeminiProvider.key_configured():
-            raise ServiceError("GEMINI_API_KEY belum diatur (Settings → API key Gemini).")
         parts_extra: list = []
-        body_text: Optional[str]
+        body_text: Optional[str] = None
+        rows: Optional[list] = None
         if text and text.strip():
-            body_text = text.strip()[:60000]
+            body_text = text.strip()[:200000]
         else:
             if not data:
                 raise ServiceError("pilih berkas atau tempel teks tarif")
@@ -1636,29 +1720,52 @@ class CandraService:
                 raise ServiceError(str(e))
             if info["kind"] == "inline":
                 import base64
-                body_text = None
                 parts_extra = [{"inlineData": {"mimeType": info["mime"], "data": base64.b64encode(info["data"]).decode()}}]
+                use_ai = True
             else:
                 body_text = info["text"]
-        slim = research.fee_relevant_text(body_text) if body_text is not None else None
-        prompt = research.fee_file_prompt(marketplace, seller_type, slim)
-        local_used = None
-        try:
-            raw = self.providers["gemini"].generate([{"text": prompt}] + parts_extra)
-            res = research.parse_fee_file(raw, body_text)
-        except (ValueError, feemod.FeeError) as e:
-            res = research.local_fee_guess(body_text) if body_text is not None else None
-            if not res or not res["components"]:
-                raise ServiceError(f"membaca berkas gagal: {e}")
-            local_used = str(e)[:300]
-        if not res["components"]:
+                rows = info.get("rows")
+        warn_local, res, local_used = "", None, None
+        if body_text is not None and not use_ai:
+            loc = feetable.parse(rows if rows is not None else feetable.to_rows(body_text), seller_type)
+            if loc["components"] or loc["overrides"]:
+                present = research.numbers_in(body_text)
+                res = {"components": feemod.validate_components(loc["components"]) if loc["components"] else [], "overrides": feemod.validate_overrides(loc["overrides"]),
+                       "dataDate": "", "notes": loc["notes"], "dropped": [], "numbersVerified": True, "method": "lokal"}
+                warn_local = "Dibaca TANPA AI: hanya angka yang tertulis di berkas Anda (rentang memakai angka tertinggi; program opsional dimatikan, aktifkan sendiri bila ikut). "
+            elif not GeminiProvider.key_configured():
+                raise ServiceError("Tidak ada baris tarif yang dikenali di berkas ini. Coba 'Baca dengan Gemini' (perlu API key) atau tempel tabelnya.")
+        if res is None:
+            if not GeminiProvider.key_configured():
+                raise ServiceError("GEMINI_API_KEY belum diatur (Settings → API key Gemini).")
+            slim = research.fee_relevant_text(body_text) if body_text is not None else None
+            prompt = research.fee_file_prompt(marketplace, seller_type, slim)
+            try:
+                raw = self.providers["gemini"].generate([{"text": prompt}] + parts_extra)
+                res = research.parse_fee_file(raw, body_text)
+                res["method"] = "gemini"
+            except (ValueError, feemod.FeeError) as e:
+                res = None
+                if body_text is not None:
+                    loc = feetable.parse(rows if rows is not None else feetable.to_rows(body_text), seller_type)
+                    if loc["components"] or loc["overrides"]:
+                        res = {"components": feemod.validate_components(loc["components"]) if loc["components"] else [],
+                               "overrides": feemod.validate_overrides(loc["overrides"]), "dataDate": "", "notes": loc["notes"],
+                               "dropped": [], "numbersVerified": True}
+                    else:
+                        res = research.local_fee_guess(body_text)
+                if not res or not (res["components"] or res.get("overrides")):
+                    raise ServiceError(f"membaca berkas gagal: {e}")
+                res["method"] = "lokal-darurat"
+                local_used = str(e)[:300]
+        if not res["components"] and not res["overrides"]:
             raise ServiceError("tidak ada komponen biaya yang bisa dipastikan dari berkas ini" + (": " + "; ".join(res["dropped"][:3]) if res["dropped"] else ""))
         return {"marketplace": marketplace, "fileName": (filename or "teks tempel")[:80], "suggestion": res, "sellerType": seller_type,
-                "localFallback": local_used,
-                "warning": ("Gemini gagal (" + local_used[:120] + "), jadi berkas dibaca TANPA AI dari baris yang memuat % / Rp — periksa semua angka. " if local_used else "")
+                "method": res.get("method", ""), "localFallback": local_used,
+                "warning": warn_local + ("Gemini gagal (" + local_used[:120] + "), jadi berkas dibaca TANPA AI dari baris yang memuat % / Rp — periksa semua angka. " if local_used else "")
                            + ("Angka sudah dicocokkan dengan teks berkas. " if res["numbersVerified"] else
                               "Berkas PDF/gambar tidak bisa dicocokkan otomatis: periksa setiap angka sendiri. ")
-                           + ("" if local_used else "Tetap usulan AI: cek sebelum disimpan.")}
+                           + ("Tetap usulan AI: cek sebelum disimpan." if res.get("method") == "gemini" else "")}
 
     def set_product_price(self, collection_id: int, product_id: int, marketplace: str, price: Optional[int]) -> dict:
         """Ikon pensil: harga jual manual per produk (varian lain disesuaikan proporsional menurut modalnya). price=None -> kembali otomatis."""
@@ -1783,7 +1890,7 @@ class CandraService:
             if now_price is not None and now_price < even:
                 verdict = "RUGI"
             elif not comps_p:
-                verdict = "TANPA_PEMBANDING" if now_price is not None else "HARGA_BELUM_DIATUR"
+                verdict = "TANPA_PEMBANDING" if now_price is not None else "REKOMENDASI_SIAP"
             elif floor > cmin:
                 verdict = "TIDAK_BISA_BERSAING" if even > cmin else "MARGIN_TIPIS_JIKA_SAMAI"
             elif now_price is not None and now_price > med * 1.05:

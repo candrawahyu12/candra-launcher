@@ -286,6 +286,10 @@ MIGRATIONS = [
         UNIQUE(job_id, url)
     );
     """,
+    # v9: riwayat proses yang sudah selesai dibersihkan saat aplikasi dibuka lagi (batch upload tidak dihapus, hanya disembunyikan)
+    """
+    ALTER TABLE upload_batches ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
+    """,
 ]
 
 

@@ -170,7 +170,7 @@ class FeeFileFallbackTests(unittest.TestCase):
                 raise ValueError("AI_HTTP_503: This model is currently experiencing high demand")
             g.transport = boom
             data = _make_xlsx([["Komponen", "Tarif"], ["Komisi Admin Non-Star", "8.5%"], ["Biaya Layanan XTRA 4% maks Rp 10.000", ""]])
-            r = svc.fees_from_file("shopee", "tarif.xlsx", data)
+            r = svc.fees_from_file("shopee", "tarif.xlsx", data, use_ai=True)
             self.assertTrue(r["localFallback"]); self.assertEqual(len(r["suggestion"]["components"]), 2)
             self.assertIn("TANPA AI", r["warning"])
         finally:
@@ -202,11 +202,61 @@ class UploadAutoMapTests(unittest.TestCase):
         svc.create_scrape_job(source_platform="csv_feed", input_mode="csv", inputs={"csv_text": SAMPLE}, collection_name="K", rights_declaration="self_responsible")
         svc.jobs.run_pending()
         col = svc.db.one("SELECT id FROM collections")["id"]
-        svc.import_categories_file("shopee", "k.csv", b"100,Fashion Pria > Atasan > Kaos\n200,Tas Pria > Ransel\n300,Rumah > Dapur > Panci\n")
-        r = svc.auto_map_categories(col, "shopee", apply=True)
-        self.assertGreater(r["applied"], 0)
+        imp = svc.import_categories_file("shopee", "k.csv", b"100,Fashion Pria > Atasan > Kaos\n200,Tas Pria > Ransel\n300,Rumah > Dapur > Panci\n")
+        self.assertGreater(imp["autoMapped"], 0)            # setelah impor, produk langsung dipetakan otomatis
+        ov = svc.category_mapping_overview()["shopee"]
+        self.assertEqual(ov["file"]["name"], "k.csv"); self.assertEqual(ov["file"]["count"], 3)   # berkas tampil di Manage Tools
         self.assertEqual(svc.category_list_info()["shopee"], 3)       # daftar tersimpan; tidak perlu diunggah ulang
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AutoCleanOnGrabTests(unittest.TestCase):
+    def test_grab_result_is_cleaned_automatically_and_user_edits_untouched(self):
+        import csv as _csv, io as _io
+        from test_pipeline import make_svc, run_csv, SAMPLE
+        rows = list(_csv.DictReader(_io.StringIO(SAMPLE)))
+        cols = list(rows[0].keys())
+        tcol = next(c for c in cols if c == "judul")
+        dcol = next((c for c in cols if c == "deskripsi"), None)
+        out = _io.StringIO(); w = _csv.DictWriter(out, fieldnames=cols); w.writeheader()
+        for i, r in enumerate(rows[:6]):
+            if r[tcol]:
+                r[tcol] = "Oxide " + r[tcol]
+            if dcol and r[dcol]:
+                r[dcol] = "Selamat datang di toko kami! " + r[dcol] + " Hubungi WA 08123456789"
+            w.writerow(r)
+        svc = make_svc(); svc.auto_clean_enabled = True
+        run_csv(svc, out.getvalue(), name="Auto")
+        col = svc.db.one("SELECT id FROM collections WHERE name='Auto'")["id"]
+        ps = svc._products_in(col)
+        self.assertTrue(ps)
+        for p in ps:
+            t, d = svc._eff(p)
+            self.assertNotIn("Oxide", t)
+            self.assertTrue(p["title_original"].startswith("Oxide"))     # asli tetap tersimpan
+            self.assertNotIn("08123456789", d); self.assertNotIn("Selamat datang", d)
+
+
+class CleanupHistoryTests(unittest.TestCase):
+    def test_finished_history_cleared_unfinished_kept_and_paused(self):
+        svc = make_svc()
+        svc.create_scrape_job(source_platform="csv_feed", input_mode="csv", inputs={"csv_text": SAMPLE}, collection_name="Sel", rights_declaration="unverified")
+        svc.jobs.run_pending()                                              # selesai -> akan dibersihkan
+        svc.create_scrape_job(source_platform="csv_feed", input_mode="csv", inputs={"csv_text": SAMPLE}, collection_name="Blm", rights_declaration="unverified")
+        jid2 = svc.db.one("SELECT MAX(id) m FROM scrape_jobs")["m"]
+        svc.db.execute("UPDATE scrape_jobs SET status='interrupted' WHERE id=?", (jid2,))      # PC mati di tengah jalan
+        col = svc.db.one("SELECT id FROM collections WHERE name='Sel'")["id"]
+        svc.db.execute("INSERT INTO upload_batches(collection_id, target_platform, status, created_at) VALUES(?,?,?,?)", (col, "sandbox", "SUCCEEDED", "2026-01-01"))
+        svc.db.execute("INSERT INTO upload_batches(collection_id, target_platform, status, created_at) VALUES(?,?,?,?)", (col, "sandbox", "PROCESSING", "2026-01-01"))
+        svc.db.execute("INSERT INTO upload_batches(collection_id, target_platform, status, created_at) VALUES(?,?,?,?)", (col, "sandbox", "READY_FOR_PREVIEW", "2026-01-01"))
+        r = svc.cleanup_history()
+        shown = svc.list_processes()
+        titles = {(p["type"], p["status"]) for p in shown}
+        self.assertEqual(r["jobsArchived"], 1)
+        self.assertIn(("grab", "interrupted"), titles)                    # belum selesai: tetap ada (bisa resume)
+        self.assertIn(("upload", "PAUSED"), titles)                       # sedang berjalan saat berhenti: PAUSED, bisa dilanjutkan
+        self.assertNotIn(("upload", "SUCCEEDED"), titles); self.assertNotIn(("upload", "READY_FOR_PREVIEW"), titles)
+        self.assertEqual(len(shown), 2)

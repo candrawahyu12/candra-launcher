@@ -72,8 +72,8 @@ async function processItem(item, delayRange) {
   const start = () => tabSend(grabTab, { type: "grabStart", kind: item.kind, limit: item.limit });
   await start();
   let res = null, restarts = 0;
-  for (let i = 0; i < 1800 && !stopFlag; i++) {  // maks ~60 menit; pengguna bisa menyelesaikan verifikasi kapan saja di dalamnya
-    await sleepMs(2000);
+  for (let i = 0; i < 8000 && !stopFlag; i++) {  // maks ~60 menit; pengguna bisa menyelesaikan verifikasi kapan saja di dalamnya
+    await sleepMs(450);
     let p;
     try { p = await tabSend(grabTab, { type: "grabPoll" }); } catch (_) { p = null; }
     if (!p) { try { await chrome.tabs.get(grabTab); } catch (_) { return { state: "needs_human", note: "tab ditutup" }; } continue; }
@@ -106,7 +106,7 @@ async function runQueue() {
       await call("/api/grab/item/" + next.id + "/done", { state: out.state, note: out.note || "", cards: out.cards || [] });
       did++;
       if (out.state === "needs_human") break;  // berhenti sampai Anda menekan Lanjutkan
-      await sleepMs(4000 + Math.random() * 5000);  // jeda antar halaman (sopan pada server marketplace; bukan untuk menghindari deteksi)
+      await sleepMs(700 + Math.random() * 800);  // jeda singkat antar halaman (sopan pada server marketplace; bukan untuk menghindari deteksi)
     }
   } catch (e) {
     await setStatus({ running: false, error: String(e.message || e) });
@@ -129,6 +129,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   (async () => {
     if (msg.type === "send") return call("/api/capture", { items: msg.items });
     if (msg.type === "queueRun") { runQueue(); return { started: true }; }
+    if (msg.type === "relayRun") { runQueue(); return { started: true }; }
     if (msg.type === "queueStop") { stopFlag = true; if (grabTab != null) { try { await chrome.tabs.sendMessage(grabTab, { type: "grabCancel" }); } catch (_) {} } return { stopped: true }; }
     if (msg.type === "ping") return call("/api/health");
     if (msg.type === "rules") { const r = await call("/api/capture/rules"); await chrome.storage.local.set({ rules: r }); return r; }

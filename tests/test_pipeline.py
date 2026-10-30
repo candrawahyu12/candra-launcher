@@ -61,7 +61,9 @@ def make_svc(**kw):
     tmp = tempfile.mkdtemp()
     kw.setdefault("resolver", pub)
     kw.setdefault("sleep", lambda s: None)
-    return CandraService(":memory:", tmp, **kw)
+    svc = CandraService(":memory:", tmp, **kw)
+    svc.auto_clean_enabled = False  # tes lama memeriksa data mentah; pembersihan otomatis diuji terpisah
+    return svc
 
 
 def run_csv(svc, text=SAMPLE, name="Supplier", rights="supplier_permitted", **kw):

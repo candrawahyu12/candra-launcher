@@ -99,3 +99,11 @@ bisa berubah; bila data tidak lengkap, klik ikon ekstensi → "Unduh diagnostik 
 - **Hapus produk**: kolom centang "Hapus" + tombol "Hapus yang dipilih" di Collection.
 - **Kategori & tarif tersimpan permanen**; Preview Upload mengisi kategori otomatis (kata kunci + Gemini); impor xlsx kini mengenali kolom ID di mana saja, sel gabungan, dan baris judul.
 - Olah gambar diproses paralel.
+
+## v0.14.0
+- **Grabber lebih cepat**: jeda & pembacaan halaman di ekstensi (v0.3.1) dipangkas; halaman daftar punya opsi **"Buka tiap produk…"** — dimatikan = satu halaman daftar langsung tersimpan semua (cepat); dinyalakan = varian, harga varian & deskripsi ikut diambil. Jumlah halaman sampai 30.
+- **Pembersihan otomatis**: hasil grab langsung dibersihkan (merek di awal judul, sapaan toko, nomor/link/akun, ajakan chat). Produk yang sudah Anda edit tidak disentuh; teks asli tetap tersimpan.
+- **Berkas tarif** dibaca langsung tanpa AI (`feetable.py`): hanya angka yang tertulis, rentang → tertinggi, program opsional dimatikan, tarif per kategori dibaca dari tabel; tersimpan permanen dan ditampilkan (nama berkas, waktu, isi). Gemini opsional.
+- **Harga & Kompetitor**: status "Siap: pakai harga rekomendasi" (bukan "belum diatur"); kolom *Impas* dijelaskan (harga jual terendah agar laba Rp0).
+- **Manage Tools**: berkas kategori & tarif yang pernah diunggah tampil; setelah impor, produk langsung dipetakan otomatis; pembaca kategori memilih hasil terbanyak dan menampilkan pratinjau bila hanya sedikit terbaca.
+- **Process Monitor**: riwayat yang selesai dibersihkan saat aplikasi dibuka lagi; proses yang belum selesai tetap ada dan berhenti sebagai PAUSED/interrupted (bisa dilanjutkan). Migrasi DB v9.

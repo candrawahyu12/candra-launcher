@@ -165,6 +165,11 @@ class JobManager:
             raise JobError(f"platform '{source_platform}' tidak didukung")
         options = dict(options or {})
         options["grab_discount_price"] = bool(options.get("grab_discount_price", False))
+        try:
+            options["pages"] = max(1, min(int(options.get("pages") or 1), 30))
+        except (TypeError, ValueError):
+            options["pages"] = 1
+        options["fetch_details"] = options.get("fetch_details", True) is not False
         options["rights_declaration"] = rights_declaration
         options.setdefault("delay_seconds", 1.0 if source_platform in WEB_PLATFORMS else 0.0)
         is_browser = source_platform == "browser_capture"
@@ -357,6 +362,12 @@ class JobManager:
                         (status, now(), summary, job_id))
         sev = "info" if status.startswith("completed") else "warning"
         self.db.event("scrape", job_id, sev, f"JOB_{status.upper()}", summary or "")
+        cb = getattr(self, "on_finish", None)
+        if cb and status.startswith("completed"):
+            try:
+                cb(job_id)
+            except Exception:  # noqa: BLE001 - pembersihan otomatis tidak boleh menggagalkan job
+                pass
 
     def _record(self, job_id: int, ref: Ref, status: str, code: Optional[str] = None, msg: Optional[str] = None,
                 attempts: int = 1) -> None:
