@@ -42,3 +42,4 @@ table{border-collapse:collapse;width:100%}th,td{padding:7px 9px;border-bottom:1p
 .rv-orig{padding:8px 10px}.rv-ai{padding:8px 10px;border-top:1px dashed var(--line);border-left:3px solid var(--pri);background:rgba(47,107,255,.05)}
 .rv-l{font-size:11px;letter-spacing:.05em;color:var(--mut);margin-bottom:4px;font-weight:600}.rv-t{font-weight:600}
 .rv-d{white-space:pre-wrap;font-size:12.5px;color:var(--mut);max-height:130px;overflow:auto;margin-top:4px}.rv textarea{width:100%;min-height:120px;margin-top:4px}
+tr.marked td{background:rgba(217,59,59,.12)}

@@ -182,6 +182,8 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
                 return svc.search_categories(q.get("marketplace", ""), q.get("q", ""), int(q.get("limit", 20)))
             if path == "/api/fees/profile":
                 return svc.get_fee_profile(q.get("marketplace", ""))
+            if path == "/api/images/progress":
+                return dict(svc.image_progress or {"running": False})
             if path == "/api/images/status":
                 return svc.image_status()
             if m := re.fullmatch(r"/api/products/(\d+)/competitors", path):
@@ -210,8 +212,6 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
                 return svc.get_collection_settings(int(m[1]))
             if path == "/api/collections":
                 return svc.list_collections()
-            if path == "/api/sources":
-                return svc.list_sources()
             if path == "/api/jobs":
                 return svc.list_jobs()
             if path == "/api/templates":
@@ -237,8 +237,6 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
             raise ServiceError("rute tidak ditemukan")
 
         def route_post(self, path: str, b: dict):
-            if path == "/api/sources":
-                return svc.add_source(b["platform"], b["domain"], b.get("permissionNote", ""))
             if m := re.fullmatch(r"/api/collections/(\d+)/apply-prices", path):
                 return svc.apply_recommended_prices(int(m[1]), b.get("marketplace", ""), float(b.get("targetMarginPct", 10)), float(b.get("extraCost", 0) or 0),
                                                    bool(b.get("useAiPrices")), b.get("productIds"), int(b.get("roundStep", 100)), apply=b.get("apply") is True,
@@ -333,7 +331,11 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
             if m := re.fullmatch(r"/api/fill/item/(\d+)/done", path):
                 return svc.fill_done(self.headers.get("X-Candra-Token"), int(m[1]), str(b.get("state", "")), str(b.get("note", "")))
             if path == "/api/capture":
-                return svc.capture_products(b.get("items"), self.headers.get("X-Candra-Token"))
+                return svc.capture_products(b.get("items"), self.headers.get("X-Candra-Token"), b.get("jobId"))
+            if path == "/api/grab/next":
+                return svc.grab_next(self.headers.get("X-Candra-Token"))
+            if m := re.fullmatch(r"/api/grab/item/(\d+)/done", path):
+                return svc.grab_finish(self.headers.get("X-Candra-Token"), int(m[1]), b)
             if path == "/api/validate-urls":
                 return svc.validate_urls(b.get("sourcePlatform", "web_jsonld"), b.get("inputMode", "detail_urls"), b.get("lines") or [])
             if path == "/api/ai/key":
@@ -353,8 +355,6 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
                 return svc.set_ai_provider(b.get("name", ""))
             if path == "/api/ai/test":
                 return svc.ai_test()
-            if path == "/api/sources/remove":
-                return svc.remove_source(b.get("domain", ""))
             if m := re.fullmatch(r"/api/jobs/(\d+)/save", path):
                 return svc.save_grab(int(m[1]), b.get("name", ""), b.get("description", ""), b.get("removeFromHistory", True) is not False)
             if m := re.fullmatch(r"/api/jobs/(\d+)/archive", path):
@@ -391,9 +391,11 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
             if m := re.fullmatch(r"/api/collections/(\d+)/rights", path):
                 return {"updated": svc.set_rights(int(m[1]), b["status"], b.get("productIds"))}
             if m := re.fullmatch(r"/api/collections/(\d+)/analyze", path):
-                return svc.analyze_collection(int(m[1]), b.get("shopNames"))
+                return svc.analyze_collection(int(m[1]), b.get("shopNames"), b.get("autoBrands", True) is not False)
+            if m := re.fullmatch(r"/api/collections/(\d+)/brands", path):
+                return svc.detect_brands(int(m[1]), bool(b.get("useAi")))
             if m := re.fullmatch(r"/api/collections/(\d+)/clean", path):
-                return svc.clean_products(int(m[1]), b["types"], b.get("productIds"), b.get("shopNames"))
+                return svc.clean_products(int(m[1]), b["types"], b.get("productIds"), b.get("shopNames"), auto_brands=b.get("autoBrands", True) is not False)
             if m := re.fullmatch(r"/api/collections/(\d+)/optimize-one", path):
                 return svc.optimize_one(int(m[1]), int(b["productId"]), b.get("shopNames") or [], int(b.get("maxTitle", 100)))
             if m := re.fullmatch(r"/api/collections/(\d+)/optimize", path):

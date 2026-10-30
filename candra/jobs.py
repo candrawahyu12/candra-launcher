@@ -7,9 +7,11 @@ import re
 import time
 import uuid
 from typing import Any, Callable, Optional
+from urllib.parse import urlsplit
 
 from .adapters import ParseError, Ref, SourceAdapter, content_hash, validate_product
 from .db import DB
+from . import browsergrab as bg
 from .urlsafe import (AccessDenied, FetchError, HumanVerificationRequired, RetryableFetchError, RobotsDisallowed,
                       UnsafeURL, validate_url)
 from .util import now, redact
@@ -27,6 +29,10 @@ WEB_PLATFORMS = ("web_jsonld",)
 
 class JobError(ValueError):
     pass
+
+
+def urlsplit_scheme(url: str) -> str:
+    return urlsplit(url.strip()).scheme
 
 
 _LIMIT_PREFIX = re.compile(r"^\s*(\d{1,5})\s*-\s*(https?://\S+)\s*$", re.I)
@@ -111,18 +117,6 @@ class JobManager:
         self.resolver = resolver
 
     # ------------------------------------------------------------ pembuatan
-    def allowed_domains(self, platform: str) -> list[str]:
-        return [r["domain"] for r in self.db.query("SELECT domain FROM allowed_sources WHERE platform=?", (platform,))]
-
-    def add_allowed_source(self, platform: str, domain: str, permission_note: str) -> None:
-        domain = domain.strip().lower()
-        if not domain or "/" in domain or " " in domain:
-            raise JobError("domain tidak valid")
-        if len(permission_note.strip()) < 5:
-            raise JobError("catatan izin sumber wajib diisi (mis. 'feed resmi supplier X, disetujui tgl ...')")
-        self.db.execute("INSERT OR REPLACE INTO allowed_sources(platform, domain, permission_note, created_at) VALUES(?,?,?,?)",
-                        (platform, domain, permission_note.strip(), now()))
-
     def create_job(self, *, source_platform: str, input_mode: str, inputs: dict, limit: Optional[int] = None,
                    collection_name: Optional[str] = None, filters: Optional[dict] = None, options: Optional[dict] = None,
                    rights_declaration: str = "unverified", created_by: str = "local") -> dict:
@@ -146,16 +140,18 @@ class JobManager:
                 raise JobError("minimal satu URL")
             if len(urls) > MAX_URLS_PER_JOB:
                 raise JobError(f"maksimal {MAX_URLS_PER_JOB} URL per job")
-            allowed = self.allowed_domains(source_platform)
-            if not allowed:
-                raise JobError("belum ada domain sumber di allowlist; tambahkan dengan catatan izin lebih dulu")
+            kinds = {"browser" if bg.is_browser_url(u) else "web" for u in urls}
+            if len(kinds) > 1:
+                raise JobError("URL Shopee/Tokopedia (diambil lewat Chrome Anda) harus dipisah dari URL website lain; jalankan dua kali")
             kwargs = {"resolver": self.resolver} if self.resolver else {}
             for u in urls:
                 try:
-                    validate_url(u, allowed, **kwargs)
+                    validate_url(u, None, **kwargs) if kinds == {"web"} else self._check_browser_url(u, input_mode)
                 except UnsafeURL as e:
                     raise JobError(f"URL ditolak: {e}")
             inputs = {"urls": urls, "mode": input_mode, "limits": limits if input_mode == "list_url" else {}}
+            if kinds == {"browser"}:
+                source_platform = "browser_capture"
         elif source_platform == "csv_feed":
             if input_mode != "csv":
                 raise JobError("csv_feed memakai input_mode 'csv'")
@@ -171,6 +167,7 @@ class JobManager:
         options["grab_discount_price"] = bool(options.get("grab_discount_price", False))
         options["rights_declaration"] = rights_declaration
         options.setdefault("delay_seconds", 1.0 if source_platform in WEB_PLATFORMS else 0.0)
+        is_browser = source_platform == "browser_capture"
 
         if collection_name:
             col = self.db.one("SELECT id FROM collections WHERE name=?", (collection_name,))
@@ -182,14 +179,28 @@ class JobManager:
         job_id = self.db.execute(
             "INSERT INTO scrape_jobs(source_platform, input_mode, status, requested_limit, filters_json, inputs_json,"
             " options_json, collection_id, created_by, created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-            (source_platform, input_mode, "queued", limit, json.dumps(filters), json.dumps(inputs, ensure_ascii=False),
+            (source_platform, input_mode, "waiting_browser" if is_browser else "queued", limit, json.dumps(filters), json.dumps(inputs, ensure_ascii=False),
              json.dumps(options), col_id, created_by, now())).lastrowid
         self.db.execute("UPDATE collections SET source_job_id=COALESCE(source_job_id, ?) WHERE id=?", (job_id, col_id))
         if not collection_name:
             self.db.execute("UPDATE collections SET name=? WHERE id=?", (f"__grab_{job_id}", col_id))
-        n_src = len(inputs.get("urls", [])) if source_platform in WEB_PLATFORMS else 1
+        if is_browser:
+            bg.create_queue(self.db, job_id, inputs["urls"], input_mode, inputs.get("limits") or {})
+        n_src = len(inputs.get("urls", [])) if (source_platform in WEB_PLATFORMS or is_browser) else 1
         self.db.event("scrape", job_id, "info", "JOB_CREATED", f"{source_platform}/{input_mode}: {n_src} sumber")
-        return {"jobId": job_id, "status": "queued", "collectionId": col_id}
+        return {"jobId": job_id, "status": "waiting_browser" if is_browser else "queued", "collectionId": col_id,
+                "viaBrowser": is_browser}
+
+    @staticmethod
+    def _check_browser_url(url: str, input_mode: str) -> None:
+        from .capture import CaptureError, identify
+        try:
+            if input_mode == "detail_urls":
+                identify(url)
+            elif urlsplit_scheme(url) != "https":
+                raise UnsafeURL("hanya https")
+        except CaptureError as e:
+            raise UnsafeURL(f"{e} (mode Detail URL harus berupa halaman satu produk; untuk halaman daftar/toko pakai tab List URL)")
 
     @staticmethod
     def _validate_filters(f: dict) -> dict:
@@ -231,8 +242,10 @@ class JobManager:
                 "createdAt": job["created_at"], "sourcePlatform": job["source_platform"], "inputMode": job["input_mode"],
                 "urlCount": self._url_count(job), "archived": bool(job["archived"]),
                 "collectionStatus": (self.db.one("SELECT status FROM collections WHERE id=?", (job["collection_id"],)) or {}).get("status"),
-                "canCancel": job["status"] in ("queued", "running"),
-                "canResume": job["status"] in ("interrupted", "needs_human", "completed_with_errors", "failed")}
+                "canCancel": job["status"] in ("queued", "running", "waiting_browser"),
+                "canResume": job["status"] in ("interrupted", "needs_human", "completed_with_errors", "failed"),
+                "viaBrowser": job["source_platform"] == "browser_capture" and job["input_mode"] != "capture",
+                "queue": bg.queue_counts(self.db, job_id) if job["source_platform"] == "browser_capture" else None}
 
     @staticmethod
     def _url_count(job: dict) -> int:
@@ -247,7 +260,11 @@ class JobManager:
 
     def cancel(self, job_id: int) -> None:
         job = self.get_job(job_id)
-        if job["status"] == "queued":
+        if job["source_platform"] == "browser_capture":
+            bg.cancel_queue(self.db, job_id)
+            if job["status"] in ("waiting_browser", "running", "needs_human"):
+                self.db.execute("UPDATE scrape_jobs SET status='cancelled', finished_at=? WHERE id=?", (now(), job_id))
+        elif job["status"] == "queued":
             self.db.execute("UPDATE scrape_jobs SET status='cancelled', finished_at=? WHERE id=?", (now(), job_id))
         elif job["status"] == "running":
             self.db.execute("UPDATE scrape_jobs SET cancel_requested=1 WHERE id=?", (job_id,))
@@ -257,12 +274,17 @@ class JobManager:
         job = self.get_job(job_id)
         if job["status"] not in ("interrupted", "needs_human", "completed_with_errors", "failed"):
             raise JobError(f"job berstatus '{job['status']}' tidak bisa dilanjutkan")
-        self.db.execute("UPDATE scrape_jobs SET status='queued', cancel_requested=0, error_summary=NULL WHERE id=?", (job_id,))
+        if job["source_platform"] == "browser_capture" and job["input_mode"] != "capture":
+            bg.resume_queue(self.db, job_id)
+            self.db.execute("UPDATE scrape_jobs SET cancel_requested=0, error_summary=NULL WHERE id=?", (job_id,))
+            bg.refresh_job(self.db, job_id)
+        else:
+            self.db.execute("UPDATE scrape_jobs SET status='queued', cancel_requested=0, error_summary=NULL WHERE id=?", (job_id,))
         self.db.event("scrape", job_id, "info", "JOB_RESUMED")
 
     def recover(self) -> int:
         """Dipanggil saat aplikasi start: job yang tertinggal 'running' ditandai interrupted agar bisa dilanjutkan."""
-        cur = self.db.execute("UPDATE scrape_jobs SET status='interrupted' WHERE status='running'")
+        cur = self.db.execute("UPDATE scrape_jobs SET status='interrupted' WHERE status='running' AND source_platform<>'browser_capture'")
         return cur.rowcount
 
     def run_pending(self) -> int:

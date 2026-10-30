@@ -1,4 +1,4 @@
-"""Validasi URL (anti-SSRF) dan fetch aman: allowlist domain, tolak IP privat, validasi tiap redirect,
+"""Validasi URL (anti-SSRF) dan fetch aman: tolak IP privat/loopback, validasi tiap redirect (domain publik mana pun boleh),
 batas ukuran/timeout/content-type, serta pin koneksi ke IP yang sudah divalidasi (anti DNS rebinding)."""
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ MAX_REDIRECTS = 3
 TIMEOUT = 15
 ALLOWED_CONTENT_TYPES = ("text/html", "application/json", "application/ld+json", "text/plain",
                          "application/xml", "text/xml", "text/csv", "application/xhtml+xml")
-USER_AGENT = "CandraBot/0.1 (+izin-sumber-tercatat; hubungi pemilik toko)"
+USER_AGENT = "Mozilla/5.0 (compatible; CandraBot/0.13)"
 
 
 class UnsafeURL(ValueError):
@@ -82,7 +82,7 @@ def host_allowed(host: str, allowed_domains: Iterable[str]) -> bool:
     return False
 
 
-def validate_url(url: str, allowed_domains: Iterable[str], *, resolver: Callable = socket.getaddrinfo,
+def validate_url(url: str, allowed_domains: Optional[Iterable[str]] = None, *, resolver: Callable = socket.getaddrinfo,
                  allow_http: bool = False) -> list[str]:
     """Kembalikan daftar IP publik hasil resolve. Raise UnsafeURL bila apa pun mencurigakan."""
     if not isinstance(url, str) or not url.strip() or len(url) > 2048:
@@ -109,8 +109,8 @@ def validate_url(url: str, allowed_domains: Iterable[str], *, resolver: Callable
         raise UnsafeURL("port tidak valid")
     if port not in (None, 80, 443):
         raise UnsafeURL(f"port {port} tidak diizinkan")
-    if not host_allowed(host, allowed_domains):
-        raise UnsafeURL(f"domain '{host}' tidak ada di allowlist sumber")
+    if allowed_domains is not None and not host_allowed(host, allowed_domains):  # None = domain publik mana pun
+        raise UnsafeURL(f"domain '{host}' tidak diizinkan")
     try:
         infos = resolver(host, port or (443 if parts.scheme == "https" else 80), type=socket.SOCK_STREAM)
     except socket.gaierror:
@@ -150,9 +150,9 @@ def looks_like_challenge(text: str) -> bool:
     return bool(_CAPTCHA.search(text or ""))
 
 
-def safe_fetch(url: str, allowed_domains: Iterable[str], *, allow_http: bool = False,
+def safe_fetch(url: str, allowed_domains: Optional[Iterable[str]] = None, *, allow_http: bool = False,
                resolver: Callable = socket.getaddrinfo) -> FetchResult:
-    allowed_domains = list(allowed_domains)
+    allowed_domains = None if allowed_domains is None else list(allowed_domains)
     current = url
     for _hop in range(MAX_REDIRECTS + 1):
         ips = validate_url(current, allowed_domains, resolver=resolver, allow_http=allow_http)

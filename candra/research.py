@@ -166,3 +166,61 @@ def parse_fee_file(raw: str, text: str | None) -> dict:
         overrides = []
     return {"components": comps, "overrides": overrides, "dataDate": str(obj.get("tanggal_data", ""))[:40],
             "notes": str(obj.get("catatan", ""))[:600], "dropped": dropped[:20], "numbersVerified": present is not None}
+
+
+FEE_WORDS = ("komisi", "administrasi", "admin", "layanan", "pemrosesan", "transaksi", "gratis ongkir", "xtra", "cashback", "hemat kirim",
+             "asuransi", "program", "pembayaran", "biaya", "fee", "service", "commission", "payment")
+
+
+def fee_relevant_text(text: str, max_lines: int = 600) -> str:
+    """Saring isi berkas besar ke baris yang memuat biaya (%/Rp/kata biaya) supaya permintaan ke Gemini kecil & cepat. Baris judul dipertahankan."""
+    keep = []
+    for i, line in enumerate(text.splitlines()):
+        low = line.lower()
+        if "%" in line or "rp" in low or any(w in low for w in FEE_WORDS):
+            keep.append(line.strip()[:400])
+        if len(keep) >= max_lines:
+            break
+    return "\n".join(keep) if len(keep) >= 3 else text
+
+
+def local_fee_guess(text: str) -> dict:
+    """TANPA AI: baca baris yang memuat nama biaya + angka persen/Rp. Dipakai bila Gemini gagal (kuota/server sibuk). Selalu perlu diperiksa pengguna.
+    Baris khusus Mall dilewati (toko non-Mall)."""
+    comps, seen = [], set()
+    for line in (text or "").splitlines():
+        low = line.lower()
+        if not any(w in low for w in FEE_WORDS):
+            continue
+        if re.search(r"\bmall\b", low) and "non" not in low:
+            continue
+        pm = re.search(r"(\d{1,2}(?:[.,]\d{1,2})?)\s*%", line)
+        cap = None
+        mc = re.search(r"(?:maks(?:imum|imal)?|max(?:imum)?|hingga|up to|capped at)\D{0,12}(?:rp\.?\s*)?([\d.,]{4,12})", low)
+        if mc:
+            try:
+                cap = float(re.sub(r"[.,]", "", mc.group(1)))
+            except ValueError:
+                cap = None
+        if pm:
+            kind, val = "percent", float(pm.group(1).replace(",", "."))
+        else:
+            mr = re.search(r"rp\.?\s*([\d.,]{3,12})", low)
+            if not mr:
+                continue
+            kind, val = "fixed", float(re.sub(r"[.,]", "", mr.group(1)))
+            cap = None
+        name = re.sub(r"\s+", " ", re.sub(r"[\d.,%]+|rp\.?|maks\w*|[:|;]", " ", line, flags=re.I)).strip(" -–")[:60] or "Biaya"
+        key = (name.lower(), kind, val)
+        if key in seen or not (0 < val <= (50 if kind == "percent" else 1e7)):
+            continue
+        seen.add(key)
+        comps.append({"name": name, "kind": kind, "value": val, "cap": cap, "dynamic": False, "enabled": True, "note": "dibaca tanpa AI dari: " + line.strip()[:120]})
+        if len(comps) >= 12:
+            break
+    try:
+        comps = validate_components(comps) if comps else []
+    except Exception:  # noqa: BLE001
+        comps = []
+    return {"components": comps, "overrides": [], "dataDate": "", "notes": "Dibaca tanpa AI (heuristik baris berisi % / Rp). Periksa semua angka.",
+            "dropped": [], "numbersVerified": True}

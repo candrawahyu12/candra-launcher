@@ -90,3 +90,12 @@ bisa berubah; bila data tidak lengkap, klik ikon ekstensi → "Unduh diagnostik 
 - **Analisis & Bersihkan**: saran merek/toko di awal judul (klik untuk memasukkan ke kolom), ringkasan tidak lagi "undefined".
 - **Manage Tools → Kategori**: impor dari berkas unduhan marketplace (.xlsx/.csv/.tsv/.txt; format pohon id+parent atau kolom level dikenali otomatis).
 - Tampilan: tautan nama produk berwarna terang; kotak peringatan kuning diganti warna lembut.
+
+## v0.13.0
+- **Tanpa izin domain**: daftar "Scrap Plugins"/allowlist dihapus; Grabber menerima URL apa pun. URL Shopee/Tokopedia dikirim ke antrean ekstensi di Chrome ANDA (Anda login & menyelesaikan CAPTCHA sendiri; ekstensi menunggu, tidak mengakali). Ekstensi v0.3.0 — muat ulang di chrome://extensions.
+- **Merek otomatis**: semua kata merek di awal judul (mis. Oxide, YEEXi, Accp, [TOP]) ikut dihapus saat "Bersihkan"; kolom merek tetap "Tanpa Merek"; tidak ditaruh di depan/belakang judul. Judul asli tetap tersimpan.
+- **Bersihkan identitas toko**: sapaan ("Selamat datang di toko kami"), "Merk: …", ajakan follow/chat, nomor/link/akun, dan sisa label "WA" ikut dibersihkan.
+- **Gemini**: 503 diulang otomatis; 429 mencoba model lain; file tarif tetap terbaca tanpa AI (heuristik) bila Gemini gagal.
+- **Hapus produk**: kolom centang "Hapus" + tombol "Hapus yang dipilih" di Collection.
+- **Kategori & tarif tersimpan permanen**; Preview Upload mengisi kategori otomatis (kata kunci + Gemini); impor xlsx kini mengenali kolom ID di mana saja, sel gabungan, dan baris judul.
+- Olah gambar diproses paralel.

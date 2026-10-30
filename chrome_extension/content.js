@@ -45,7 +45,7 @@
   // Aturan baca-halaman: bawaan di bawah, ditimpa oleh aturan dari aplikasi (candra/capture_rules.json) bila ada.
   let R = { variant_headings: "^(warna|ukuran|varian|variasi|pilihan|size|color|colour|model|tipe|motif|jenis|paket)\\b",
     price_regex: "Rp\\s?[\\d.]+(?:,\\d+)?", stock_regex: "(?:stok|tersisa)\\s*:?\\s*(\\d+)", gallery_min_px: 250,
-    click_delay_ms: 350, max_variant_combos: 30, image_url_hint: "susercontent|tokopedia|tiktok|image" };
+    click_delay_ms: 350, max_variant_combos: 60, image_url_hint: "susercontent|tokopedia|tiktok|image" };
   const rx = (k, f) => { try { return new RegExp(R[k], f || "i"); } catch (e) { return null; } };
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   function variantEls() {
@@ -54,12 +54,13 @@
     const hr = rx("variant_headings");
     const titles = hr ? [...document.querySelectorAll("h2,h3,label,div,span,section")].filter(e => e.children.length === 0 && hr.test(text(e)) && text(e).length < 25) : [];
     for (const t of titles.slice(0, 4)) {
-      const OPT = "button,[role=button],[class*=option i],[class*=variation i]";
+      const OPT = "button,[role=button],[class*=option i],[class*=variation i],[data-testid*=variant i]";
       // baris pilihan: saudara langsung judul; kalau tidak ada, saudara induknya; terakhir induknya sendiri
       const row = [t.nextElementSibling, t.parentElement && t.parentElement.nextElementSibling, t.parentElement].find(e => e && e.querySelector(OPT));
       if (!row) continue;
       const seen = new Set(), opts = [];
-      for (const el of row.querySelectorAll("button,[role=button],[class*=option i],[class*=variation i]")) {
+      for (const el of row.querySelectorAll(OPT)) {
+        if (el.querySelector(OPT)) continue;  // lewati pembungkus; hanya tombol pilihan itu sendiri
         const label = text(el) || (el.querySelector("img") && el.querySelector("img").alt) || el.getAttribute("aria-label") || "";
         if (label && label.length < 40 && !seen.has(label)) { seen.add(label); opts.push({ label, el }); }
       }
@@ -182,6 +183,78 @@
     return { url: cleanUrl(a.href), title, price: price ? price[0] : "", sold, images: img ? [bigImage(img.currentSrc || img.src)] : [], partial: true };
   }
 
+
+  // ---------- ambil-data otomatis dari antrean aplikasi (hanya di tab yang DIBUKA EKSTENSI ini; pengguna melihat & mengendalikannya) ----------
+  // Bila halaman meminta login/verifikasi/CAPTCHA, skrip HANYA menunggu pengguna menyelesaikannya sendiri. Tidak ada klik/isi pada halaman verifikasi.
+  const GATE_PATH = /^\/(?:buyer\/login|user\/login|verify|captcha|security-check|login|account\/verify)(?:\/|$)/i;  // hanya segmen awal path (slug produk bisa memuat kata 'security')
+  function gate() {
+    if (GATE_PATH.test(location.pathname)) return "login / verifikasi";
+    const body = (document.body && document.body.innerText) || "";
+    if (body.length < 1500 && /captcha|verifikasi (keamanan|manusia)|verify you are human|slide to verify|geser untuk/i.test(body)) return "verifikasi";
+    return "";
+  }
+  const G = { state: "idle", note: "", result: null, seq: 0 };
+  const setNote = t => { G.note = t; msg.textContent = "Grab: " + t; };
+  const pageReady = kind => kind === "detail"
+    ? !!(document.querySelector("h1") && text(document.querySelector("h1")).length > 3 && (document.body.innerText.match(rx("price_regex") || RP)))
+    : cardAnchors().length > 0;
+  async function waitReady(kind, token) {
+    const t0 = Date.now(); let seenGate = false, stable = 0;
+    while (Date.now() - t0 < 300000) {
+      if (token !== G.seq) return "cancel";
+      const g = gate();
+      if (g) { seenGate = true; setNote("menunggu Anda: " + g + " di tab ini"); G.state = "human"; await sleep(2000); continue; }
+      G.state = "running";
+      if (pageReady(kind)) { if (++stable >= 2) return "ok"; } else stable = 0;
+      setNote("memuat halaman...");
+      await sleep(900);
+    }
+    return seenGate ? "human" : "timeout";
+  }
+  async function scrollThrough(steps, shouldStop) {  // gulir bertahap supaya konten malas-muat (deskripsi/daftar) tampil, seperti pengguna menggulir
+    let last = -1, still = 0;
+    for (let i = 0; i < steps; i++) {
+      window.scrollBy({ top: Math.round(innerHeight * 0.8), behavior: "smooth" });
+      await sleep(550);
+      const h = document.documentElement.scrollHeight;
+      if (shouldStop && shouldStop()) break;
+      if (h === last && (innerHeight + scrollY) >= h - 4) { if (++still >= 2) break; } else still = 0;
+      last = h;
+    }
+  }
+  async function runGrabDetail(token) {
+    const r = await waitReady("detail", token);
+    if (r !== "ok") return r === "cancel" ? null : { state: r === "human" ? "needs_human" : "failed", note: r === "human" ? "menunggu login/verifikasi terlalu lama" : "halaman produk tidak terbaca (waktu habis)" };
+    setNote("membaca produk...");
+    await scrollThrough(6);
+    window.scrollTo({ top: 0, behavior: "smooth" }); await sleep(500);
+    const d = extractDetail();
+    const st = await new Promise(res => chrome.runtime.sendMessage({ type: "settings" }, x => res((x && x.result) || {})));
+    if (st.deepVariants !== false && Object.keys(variantGroups()).length) {
+      setNote("membaca harga & foto tiap varian...");
+      try { const dv = await deepVariants(); if (dv.length) d.variants = dv; } catch (e) { /* tetap kirim tanpa detail varian */ }
+    }
+    return { state: "done", data: d, missing: health(d) };
+  }
+  async function runGrabList(token, limit) {
+    const r = await waitReady("list", token);
+    if (r !== "ok") return r === "cancel" ? null : { state: r === "human" ? "needs_human" : "failed", note: r === "human" ? "menunggu login/verifikasi terlalu lama" : "tidak ada kartu produk terbaca di halaman ini" };
+    setNote("membaca daftar produk...");
+    const seen = new Map();
+    const collect = () => { for (const a of cardAnchors()) { const u = cleanUrl(a.href); if (u && !seen.has(u)) seen.set(u, a); } };
+    collect();
+    await scrollThrough(40, () => { collect(); return seen.size >= limit; });
+    collect();
+    const cards = [...seen.values()].slice(0, limit).map(extractCard);
+    return { state: "done", cards };
+  }
+  function startGrab(m) {
+    const token = ++G.seq;
+    G.state = "running"; G.note = ""; G.result = null;
+    (m.kind === "list" ? runGrabList(token, Math.min(m.limit || 60, 200)) : runGrabDetail(token))
+      .then(res => { if (token === G.seq && res) { G.result = res; G.state = res.state; } }, e => { if (token === G.seq) { G.result = { state: "failed", note: String(e && e.message || e) }; G.state = "failed"; } });
+  }
+
   // ---------- UI ----------
   const style = document.createElement("style");
   style.textContent = `.candra-btn{position:fixed;display:none;z-index:2147483000;background:#2f6bff;color:#fff;border:0;border-radius:6px;padding:4px 8px;font:600 12px system-ui;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.35)}
@@ -267,6 +340,9 @@
   mount();
 
   chrome.runtime.onMessage.addListener((m, _s, reply) => {
+    if (m.type === "grabStart") { startGrab(m); reply({ ok: true }); return; }
+    if (m.type === "grabPoll") { reply({ state: G.state, note: G.note, result: G.state === "done" || G.state === "failed" || G.state === "needs_human" ? G.result : null }); return; }
+    if (m.type === "grabCancel") { G.seq++; G.state = "idle"; reply({ ok: true }); return; }
     if (m.type === "diagnose") reply({ health: health(extractDetail()), rulesVersion: R.version || 0, url: cleanUrl(location.href), detail: extractDetail(), cards: cardAnchors().slice(0, 3).map(extractCard), ldFound: !!ldProduct(), h1: text(document.querySelector("h1")).slice(0, 120) });
   });
 })();

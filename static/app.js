@@ -70,7 +70,7 @@ async function procPanel(box) {
 }
 async function pgHome(v) {
   const side = h("div", { class: "card" });
-  const tiles = [["📥", "Products Grabber", "Ambil produk dari URL / CSV feed", "grabber"], ["📤", "Products Uploader", "Kirim collection ke target / export", "uploader"], ["🗂️", "Collections", "Library produk, Bulk Editor, AI", "collections"], ["📈", "Process Monitor", "Log tiap proses", "monitor"], ["🧩", "Manage Tools", "Domain sumber yang diizinkan", "tools"], ["⚙️", "Settings", "AI provider & info", "settings"]];
+  const tiles = [["📥", "Products Grabber", "Ambil produk dari URL / CSV feed", "grabber"], ["📤", "Products Uploader", "Kirim collection ke target / export", "uploader"], ["🗂️", "Collections", "Library produk, Bulk Editor, AI", "collections"], ["📈", "Process Monitor", "Log tiap proses", "monitor"], ["🧩", "Manage Tools", "Kategori marketplace & pengaturan", "tools"], ["⚙️", "Settings", "AI provider & info", "settings"]];
   const q = h("input", { placeholder: "Cari tools…", oninput: () => grid.replaceChildren(...mk()) });
   const mk = () => tiles.filter(t => (t[1] + t[2]).toLowerCase().includes(q.value.toLowerCase())).map(t => h("div", { class: "tile", onclick: () => location.hash = "#/" + t[3] }, h("span", { class: "ic" }, t[0]), h("b", {}, t[1]), h("span", { class: "mut small" }, t[2])));
   const grid = h("div", { class: "grid" }, ...mk());
@@ -125,7 +125,7 @@ function grabForm(box, onStarted) {
       inputs: web ? { urls: lines() } : { csv_text: csv.value }, limit: +limit.value || null, rightsDeclaration: rights.value,
       options: { grab_discount_price: disc.checked }, filters: titleOn.checked && titleQ.value.trim() ? { titleContains: titleQ.value.trim() } : {} };
     const r = await api("/api/jobs", body);
-    toast("Proses dijalankan… Cek Process Monitor");
+    toast(r.status === "waiting_browser" ? "Antrean dikirim ke Chrome Anda — ekstensi CANDRA Capture akan membuka halamannya. Login/CAPTCHA Anda selesaikan sendiri di Chrome." : "Proses dijalankan… Cek Process Monitor");
     onStarted(r.jobId);
   });
   ta.addEventListener("keydown", e => { if (e.ctrlKey && e.key === "Enter") start(); });
@@ -133,15 +133,14 @@ function grabForm(box, onStarted) {
     h("div", { class: "row gap" }, h("label", { class: "chk" }, disc, "Grab Harga Diskon"), h("label", { class: "chk" }, titleOn, "Grab Title", titleQ),
       h("label", {}, "Hak atas konten", rights), h("label", {}, "Maks produk", limit)),
     h("div", { class: "row gap" }, G.tab !== "csv" && h("button", { onclick: validate }, "VALIDASI URL"), h("button", { onclick: () => { ta.value = ""; csv.value = ""; out.replaceChildren(); } }, "CLEAR"),
-      h("span", { class: "grow" }), h("button", { class: "pri", onclick: start }, "START GRAB")), out),
-    h("div", { class: "note gap" }, "Hanya sumber berizin: CSV/feed dari supplier atau website di allowlist (lihat Manage Tools). Marketplace publik tidak di-scrape; CAPTCHA/blokir akan menghentikan proses, bukan dilewati."));
+      h("span", { class: "grow" }), h("button", { class: "pri", onclick: start }, "START GRAB")), out));
 }
 async function grabResult(box) {
   const id = G.sel;
   let page = 1;
   const draw = async () => {
     const st = await api("/api/jobs/" + id);
-    const active = st.status === "queued" || st.status === "running";
+    const active = ["queued", "running", "waiting_browser"].includes(st.status);
     const pct = st.attempted ? Math.round(100 * (st.succeeded + st.failed + st.skipped) / Math.max(st.attempted, 1)) : 0;
     const items = await api("/api/jobs/" + id + "/items?failed=1");
     let table = h("div", { class: "mut" }, "Belum ada produk.");
@@ -157,6 +156,9 @@ async function grabResult(box) {
         st.collectionStatus === "staging" && !active && h("button", { class: "pri", onclick: () => saveDialog(id, draw) }, "Save to Collections"),
         h("button", { onclick: () => guard(async () => { await api("/api/jobs/" + id + "/archive", {}); G.sel = null; route(); }) }, "Hapus dari histori")),
       h("div", { class: "bar gap" }, h("i", { style: "width:" + pct + "%" })),
+      st.viaBrowser && h("div", { class: "note gap" }, st.status === "needs_human" ? "Chrome menunggu Anda: di tab CANDRA yang terbuka, login atau selesaikan verifikasi/CAPTCHA sendiri, lalu klik 'Lanjutkan yang gagal'." :
+        st.status === "waiting_browser" ? "Menunggu Chrome: pastikan Chrome terbuka & ekstensi CANDRA Capture aktif (ikon puzzle → CANDRA Capture → 'Mulai ambil'). Halaman akan dibuka otomatis; login/CAPTCHA Anda selesaikan sendiri." :
+        "Antrean Chrome — selesai " + (st.queue ? st.queue.done : 0) + ", menunggu " + (st.queue ? st.queue.pending + st.queue.working : 0) + ", gagal " + (st.queue ? st.queue.failed : 0) + "."),
       h("div", { class: "small mut" }, "Success: " + st.succeeded + " · Failed: " + st.failed + " · Skipped: " + st.skipped + " · Target: " + st.attempted),
       st.collectionStatus !== "staging" && h("div", { class: "note gap" }, "Sudah tersimpan di Collections."),
       items.length ? h("details", { class: "gap" }, h("summary", {}, items.length + " item gagal"), h("table", {}, ...items.map(i => h("tr", {}, h("td", {}, i.canonical_id), h("td", {}, i.error_code), h("td", { class: "small mut" }, i.error_message_safe))))) : null,
@@ -178,8 +180,8 @@ function saveDialog(jobId, after) {
 /* ---------------- tabel produk (Grabber & Collections) ---------------- */
 function productTable(items, o = {}) {
   const sel = o.selectable;
-  return h("div", { style: "overflow:auto" }, h("table", {}, h("thead", {}, h("tr", {}, sel && h("th", {}, h("input", { type: "checkbox", onchange: e => o.onToggleAll && o.onToggleAll(e.target.checked) })), h("th", {}, "No"), h("th", {}, ""), h("th", {}, "Nama"), h("th", {}, "Varian Produk"), h("th", {}, "Harga"), h("th", {}, "Stock"), h("th", {}, "Sold"), h("th", {}, "Rating"), !o.simple && h("th", {}, "Kategori"), !o.simple && h("th", {}, "Hak"))),
-    h("tbody", {}, ...items.map((p, i) => h("tr", {}, sel && h("td", {}, h("input", { type: "checkbox", checked: !!p.selected, onchange: e => o.onSelect && o.onSelect(p.id, e.target.checked) })),
+  return h("div", { style: "overflow:auto" }, h("table", {}, h("thead", {}, h("tr", {}, o.markable && h("th", { title: "Centang produk yang mau dihapus dari collection" }, h("input", { type: "checkbox", title: "Pilih semua di halaman ini untuk dihapus", checked: items.length > 0 && items.every(p => o.marks.has(p.id)), onchange: e => o.onMarkAll(e.target.checked) }), h("div", { class: "small mut" }, "Hapus")), sel && h("th", {}, h("input", { type: "checkbox", title: "Ikut diupload (semua)", onchange: e => o.onToggleAll && o.onToggleAll(e.target.checked) }), h("div", { class: "small mut" }, "Upload")), h("th", {}, "No"), h("th", {}, ""), h("th", {}, "Nama"), h("th", {}, "Varian Produk"), h("th", {}, "Harga"), h("th", {}, "Stock"), h("th", {}, "Sold"), h("th", {}, "Rating"), !o.simple && h("th", {}, "Kategori"), !o.simple && h("th", {}, "Hak"))),
+    h("tbody", {}, ...items.map((p, i) => h("tr", { class: o.markable && o.marks.has(p.id) ? "marked" : "" }, o.markable && h("td", {}, h("input", { type: "checkbox", checked: o.marks.has(p.id), onchange: e => o.onMark(p.id, e.target.checked) })), sel && h("td", {}, h("input", { type: "checkbox", checked: !!p.selected, onchange: e => o.onSelect && o.onSelect(p.id, e.target.checked) })),
       h("td", {}, (p.position || i + 1)), h("td", {}, p.thumb ? h("img", { class: "thumb", src: p.thumb, referrerpolicy: "no-referrer", loading: "lazy", onerror: e => e.target.style.visibility = "hidden" }) : null),
       h("td", { style: "max-width:320px" }, h("a", { href: "#", onclick: e => { e.preventDefault(); productDialog(p.id); } }, p.title), p.edited ? h("span", { class: "badge warn", style: "margin-left:6px" }, "diedit") : null),
       h("td", { class: "var" }, ...(p.variantItems || []).slice(0, 3).map(x => h("div", {}, x.label + " · ", h("b", {}, rp(x.price)))), p.variants > 3 ? h("div", {}, (p.variants - 3) + " Varian Lainnya") : null),
@@ -216,6 +218,7 @@ async function collectionDetail(v, id) {
   const cols = await api("/api/collections"); const col = cols.find(c => c.id === id);
   if (!col) { v.append(h("div", { class: "card" }, "Collection tidak ditemukan. ", h("a", { href: "#/collections" }, "Kembali"))); return; }
   const S = { q: "", sort: "position", page: 1 };
+  const marks = new Set();
   const area = h("div", { class: "gap card" });
   const q = h("input", { placeholder: "Cari judul…", oninput: () => { S.q = q.value; S.page = 1; draw(); } });
   const sort = h("select", { onchange: () => { S.sort = sort.value; draw(); } }, ...[["position", "Urutan"], ["title", "Judul A-Z"], ["price", "Harga"], ["sold", "Terlaris"], ["rating", "Rating"], ["newest", "Terbaru"]].map(([k, l]) => h("option", { value: k }, l)));
@@ -225,13 +228,21 @@ async function collectionDetail(v, id) {
     h("button", { onclick: () => imageDialog(id) }, "🖼️ Gambar"), h("button", { onclick: () => bulkDialog(id, draw) }, "✏️ Bulk Editor"), h("button", { onclick: () => aiDialog(id, draw) }, "✨ AI Optimize"), h("button", { onclick: () => stockDialog(id, draw) }, "📦 Stok"), h("button", { onclick: () => priceDialog(id) }, "💰 Harga & Kompetitor"), h("button", { onclick: () => analyzeDialog(id, draw) }, "🛡️ Analisis & Bersihkan"),
     h("button", { onclick: () => dupDialog(id, draw) }, "Duplikat"), h("button", { onclick: () => settingsDialog(id) }, "⚙️ Collection Settings"), h("button", { onclick: () => rightsDialog(id, draw) }, "Hak konten"),
     h("span", { class: "grow" }), h("button", { class: "pri", onclick: () => location.hash = "#/uploader/" + id }, "Upload / Export"));
+  const delCount = h("b", {}, "0");
+  const delBtn = h("button", { class: "danger", disabled: true, onclick: () => { const n = marks.size; if (!n) return; if (confirm("Hapus " + n + " produk terpilih dari collection ini?\n(Produk dikeluarkan dari collection; data mentahnya tetap tersimpan.)")) guard(async () => { await api("/api/collections/" + id + "/remove", { productIds: [...marks] }); marks.clear(); toast(n + " produk dihapus dari collection"); draw(); }); } }, "🗑️ Hapus yang dipilih");
+  const delAll = h("button", { class: "sm", onclick: () => guard(async () => { for (let pg = 1; pg <= 50; pg++) { const r = await api("/api/collections/" + id + "/products?q=" + encodeURIComponent(S.q) + "&sort=" + S.sort + "&page=" + pg + "&pageSize=200"); r.items.forEach(p => marks.add(p.id)); if (pg * r.pageSize >= r.total) break; } draw(); }) }, "Pilih semua produk");
+  const delClr = h("button", { class: "sm", onclick: () => { marks.clear(); draw(); } }, "Batal pilih");
+  const delBar = h("div", { class: "row gap note", style: "margin-bottom:8px" }, h("span", {}, "Centang kolom ", h("b", {}, "Hapus"), " lalu klik tombol untuk membuang produk dari collection. Dipilih: ", delCount), delAll, delClr, h("span", { class: "grow" }), delBtn);
+  const syncDel = () => { delCount.textContent = String(marks.size); delBtn.disabled = marks.size === 0; };
   const draw = () => guard(async () => {
     const qs = "?q=" + encodeURIComponent(S.q) + "&sort=" + S.sort + "&page=" + S.page + "&pageSize=50";
     const r = await api("/api/collections/" + id + "/products" + qs);
-    lastItems = r.items;
+    lastItems = r.items; syncDel();
     const pages = Math.max(1, Math.ceil(r.total / r.pageSize));
     area.replaceChildren(h("div", { class: "row small mut", style: "margin-bottom:8px" }, r.total + " produk · centang = ikut diupload"),
-      productTable(r.items, { selectable: true,
+      delBar, productTable(r.items, { selectable: true, markable: true, marks,
+        onMark: (pid, on) => { on ? marks.add(pid) : marks.delete(pid); syncDel(); },
+        onMarkAll: on => { r.items.forEach(p => on ? marks.add(p.id) : marks.delete(p.id)); draw(); },
         onSelect: (pid, on) => guard(() => api("/api/collections/" + id + "/select", { productIds: [pid], selected: on })),
         onToggleAll: on => guard(async () => { await api("/api/collections/" + id + "/select", { productIds: ids(), selected: on }); draw(); }) }),
       h("div", { class: "row gap" }, h("button", { class: "sm", disabled: S.page <= 1, onclick: () => { S.page--; draw(); } }, "‹"), h("span", {}, S.page + " / " + pages), h("button", { class: "sm", disabled: S.page >= pages, onclick: () => { S.page++; draw(); } }, "›"),
@@ -399,23 +410,32 @@ function aiDialog(id, after) {
 }
 
 /* ---------- Analisis & bersihkan ---------- */
-const CLEAN_LABEL = { phone: "Nomor telepon", url: "Link", email: "Email", handle: "@handle", contact_label: "Label kontak (WA:, IG:)", promo: "Kalimat promo toko", shop_name: "Nama toko", repeated_sentence: "Kalimat berulang" };
+const CLEAN_LABEL = { phone: "Nomor telepon", url: "Link", email: "Email", handle: "@handle", contact_label: "Label kontak (WA:, IG:)", promo: "Kalimat promo / ajakan chat", welcome: "Sapaan toko (Selamat datang, terima kasih sudah berbelanja, 'toko kami')", brand_label: "Label Merek:/Toko:", title_tag: "Tag di judul ([TOP], [READY])", shop_name: "Merek / nama toko", repeated_sentence: "Kalimat berulang" };
 function analyzeDialog(id, after) {
   guard(async () => {
-    const shop = h("input", { placeholder: "Nama toko / merek yang mau dibuang dari judul & deskripsi (koma)", style: "width:100%" });
+    const shop = h("input", { placeholder: "Merek/nama toko tambahan yang mau dibuang (pisahkan koma) — merek yang yakin dibuang otomatis", style: "width:100%" });
     const out = h("div", {});
+    const names = () => shop.value.split(",").map(x => x.trim()).filter(Boolean);
+    const addName = w => { const cur = names(); if (!cur.some(x => x.toLowerCase() === w.toLowerCase())) cur.push(w); shop.value = cur.join(", "); };
     const scan = async () => {
-      const r = await api("/api/collections/" + id + "/analyze", { shopNames: shop.value.split(",").map(x => x.trim()).filter(Boolean) });
+      const r = await api("/api/collections/" + id + "/analyze", { shopNames: names() });
       const checks = Object.keys(CLEAN_LABEL).filter(k => r.totals[k]).map(k => [k, h("input", { type: "checkbox", checked: true })]);
       const pr = r.problems || {};
-      const chips = (r.brandCandidates || []).map(b => h("button", { class: "sm", title: "contoh: " + b.example, onclick: () => { const cur = shop.value.split(",").map(x => x.trim()).filter(Boolean); if (!cur.includes(b.word)) cur.push(b.word); shop.value = cur.join(", "); toast("'" + b.word + "' dimasukkan ke kolom. Klik 'Pindai ulang' lalu bersihkan."); } }, b.word + " ×" + b.count));
-      out.replaceChildren(h("div", { class: "note" }, r.products + " produk · " + r.productsWithFindings + " punya temuan" + (r.productsWithFindings ? "" : " (tidak ada nomor/link/akun/ajakan di judul & deskripsi; ini normal untuk data dari hasil pencarian Shopee yang belum punya deskripsi)")),
-        chips.length ? h("div", { class: "gap" }, h("div", { class: "small mut" }, "Kemungkinan merek/toko di awal judul (saran, bukan pasti) — klik untuk memasukkan ke kolom nama toko:"), h("div", { class: "row", style: "gap:6px;margin-top:6px" }, ...chips)) : null,
+      const autoSet = new Set((r.autoBrands || []).map(x => x.toLowerCase()));
+      const weak = (r.brandCandidates || []).filter(b => !autoSet.has(b.word.toLowerCase())).map(b => h("button", { class: "sm", title: "contoh: " + b.example, onclick: () => { addName(b.word); toast("'" + b.word + "' ikut dihapus. Klik 'Pindai ulang' untuk melihat hasilnya."); } }, b.word + " ×" + b.count));
+      out.replaceChildren(h("div", { class: "note" }, r.products + " produk · " + r.productsWithFindings + " punya temuan" + (r.productsWithFindings ? "" : " (tidak ada nomor/link/akun/sapaan toko di judul & deskripsi)")),
+        (r.autoBrands || []).length ? h("div", { class: "gap" }, h("div", { class: "small mut" }, "Merek terdeteksi otomatis — ikut dihapus dari semua judul & deskripsi. Merek di Shopee/Tokopedia diisi 'Tanpa Merek':"), h("div", { class: "row", style: "gap:6px;margin-top:6px" }, ...r.autoBrands.map(w => h("span", { class: "badge" }, w)))) : null,
+        weak.length ? h("div", { class: "gap" }, h("div", { class: "small mut" }, "Mungkin juga merek (klik untuk ikut dihapus):"), h("div", { class: "row", style: "gap:6px;margin-top:6px" }, ...weak)) : null,
         h("div", { class: "gap" }, ...checks.map(([k, c]) => h("label", { class: "chk" }, c, (CLEAN_LABEL[k]) + " (" + r.totals[k] + ")"))),
         h("div", { class: "small mut gap" }, "Tanpa gambar: " + ((pr.noImage || {}).count || 0) + " · tanpa kategori: " + ((pr.noCategory || {}).count || 0) + " · harga tidak valid: " + ((pr.invalidPrice || {}).count || 0) + " · stok 0: " + ((pr.zeroStock || {}).count || 0) + " · hak belum diverifikasi: " + ((pr.rightsUnverified || {}).count || 0)),
-        checks.length ? h("div", { class: "row gap" }, h("button", { class: "pri", onclick: () => guard(async () => { const c = await api("/api/collections/" + id + "/clean", { types: checks.filter(([, el]) => el.checked).map(([k]) => k), shopNames: shop.value.split(",").map(x => x.trim()).filter(Boolean) }); toast(c.changed + " produk dibersihkan" + (c.skipped.length ? ", " + c.skipped.length + " dilewati (spesifikasi terlindungi)" : "")); after(); scan(); }) }, "Bersihkan yang dicentang")) : h("div", { class: "mut gap" }, "Tidak ada yang perlu dibersihkan."));
+        checks.length ? h("div", { class: "row gap" }, h("button", { class: "pri", onclick: () => guard(async () => { const c = await api("/api/collections/" + id + "/clean", { types: checks.filter(([, el]) => el.checked).map(([k]) => k), shopNames: names() }); toast(c.changed + " produk dibersihkan" + (c.skipped.length ? ", " + c.skipped.length + " dilewati (spesifikasi terlindungi)" : "")); after(); scan(); }) }, "Bersihkan yang dicentang")) : h("div", { class: "mut gap" }, "Tidak ada yang perlu dibersihkan."));
     };
-    modal("Analisis & Bersihkan Data", h("div", {}, shop, h("div", { class: "row gap" }, h("button", { onclick: () => guard(scan) }, "Pindai ulang"), h("button", { class: "pri", onclick: () => { if (confirm("Hapus SEMUA jenis nomor/link/akun/nama toko/ajakan (chat, follow, klik link) dari judul & deskripsi semua produk? Teks asli tetap tersimpan.")) guard(async () => { const r = await api("/api/collections/" + id + "/clean-all", { shopNames: shop.value.split(",").map(x => x.trim()).filter(Boolean) }); toast("Dibersihkan: " + (r.changed ?? r.cleaned ?? 0) + " produk"); await scan(); after(); }); } }, "🧹 Bersihkan semua identitas & ajakan")), h("div", { class: "gap" }), out), true);
+    const aiBtn = h("button", { onclick: () => guard(async () => {
+      aiBtn.disabled = true; aiBtn.textContent = "Gemini membaca judul…";
+      try { const r = await api("/api/collections/" + id + "/brands", { useAi: true }); (r.ai || []).forEach(addName); toast(r.note ? r.note : (r.ai || []).length + " merek ditemukan Gemini & dimasukkan ke kolom. Klik 'Pindai ulang' lalu bersihkan.", !!r.note && !(r.ai || []).length); await scan(); }
+      finally { aiBtn.disabled = false; aiBtn.textContent = "🤖 Cari merek dengan Gemini"; }
+    }) }, "🤖 Cari merek dengan Gemini");
+    modal("Analisis & Bersihkan Data", h("div", {}, shop, h("div", { class: "row gap" }, h("button", { onclick: () => guard(scan) }, "Pindai ulang"), aiBtn, h("button", { class: "pri", onclick: () => { if (confirm("Hapus SEMUA merek, nama toko, sapaan toko ('Selamat datang…'), nomor/link/akun dan ajakan dari judul & deskripsi semua produk? Teks asli tetap tersimpan.")) guard(async () => { const r = await api("/api/collections/" + id + "/clean-all", { shopNames: names() }); toast("Dibersihkan: " + (r.changed ?? 0) + " produk"); await scan(); after(); }); } }, "🧹 Bersihkan semua merek, identitas & ajakan")), h("div", { class: "gap" }), out), true);
     await scan();
   });
 }
@@ -502,8 +522,12 @@ function imageDialog(id) {
     const out = h("div", { class: "gap" });
     const gOcr = h("input", { type: "checkbox" });
     const run = force => guard(async () => {
-      out.replaceChildren(h("div", { class: "mut" }, "Memproses gambar… (bisa beberapa menit; dengan Gemini sekitar 4 detik per foto)"));
-      const r = await api("/api/collections/" + id + "/images", { marketplace: mkt.value, force, geminiOcr: gOcr.checked, shopNames: shops.value.split(",").map(x => x.trim()).filter(Boolean) });
+      const pbar = h("i", { style: "width:2%" }), plabel = h("div", { class: "mut" }, "Memulai…");
+      out.replaceChildren(plabel, h("div", { class: "bar gap" }, pbar));
+      const poll = setInterval(() => api("/api/images/progress").then(g => { if (!g || !g.total) return; const pc = Math.round(100 * g.done / Math.max(1, g.total)); pbar.style.width = Math.max(2, pc) + "%"; plabel.textContent = g.phase + " — " + g.done + " / " + g.total + " foto (" + pc + "%)"; }).catch(() => {}), 800);
+      let r;
+      try { r = await api("/api/collections/" + id + "/images", { marketplace: mkt.value, force, geminiOcr: gOcr.checked, shopNames: shops.value.split(",").map(x => x.trim()).filter(Boolean) }); }
+      finally { clearInterval(poll); }
       out.replaceChildren(h("div", { class: "note" }, Object.entries(r.counts).map(([k, n]) => k + ": " + n).join(" · ") || "Tidak ada gambar diproses", r.skippedProductsRights ? " · " + r.skippedProductsRights + " produk dilewati (hak konten belum dinyatakan)" : ""),
         r.skippedProductsRights ? h("div", { class: "row gap" }, h("button", { class: "pri", onclick: () => { if (confirm("Nyatakan bahwa Anda yang bertanggung jawab atas pemakaian foto & teks dari sumber publik ini untuk SEMUA produk di collection? (tercatat di riwayat)")) guard(async () => { await api("/api/collections/" + id + "/rights", { status: "self_responsible" }); toast("Hak konten dicatat: sumber publik, tanggung jawab Anda"); run(false); }); } }, "Nyatakan sumber publik (saya bertanggung jawab) lalu proses")) : null,
         r.firstErrors && r.firstErrors.length ? h("div", { class: "note gap" }, "Sebagian foto gagal diunduh/diproses. Contoh sebab: " + r.firstErrors.join(" | ")) : null,
@@ -679,10 +703,18 @@ async function pgUploader(v, arg) {
   const target = h("select", {}, ...(U.tab === "direct" ? [["assisted", "Isi form Seller Center lewat ekstensi (Anda yang kirim) — banyak kategori OK"], ["sandbox", "Sandbox (uji coba, tidak ke marketplace)"], ["shopee_api", "Shopee Open Platform API (butuh konektor resmi)"], ["tiktok_api", "TikTok Shop API (butuh konektor resmi)"]] : [["export_csv", "File CSV mass-upload"]]).map(([k, l]) => h("option", { value: k }, l)));
   const tpl = h("select", {}); api("/api/templates").then(t => t.forEach(x => tpl.append(h("option", { value: x.id }, x.name))));
   const mkt = h("select", {}, ...[["shopee", "Shopee"], ["tokopedia", "Tokopedia"], ["tiktok", "TikTok Shop"], ["sandbox", "Sandbox"]].map(([k, l]) => h("option", { value: k }, l)));
-  target.onchange = () => { if (target.value === "shopee_api") mkt.value = "shopee"; else if (target.value === "tiktok_api") mkt.value = "tiktok"; else if (target.value === "sandbox") mkt.value = "sandbox"; drawCats(); };
-  mkt.onchange = () => drawCats();
+  target.onchange = () => { if (target.value === "shopee_api") mkt.value = "shopee"; else if (target.value === "tiktok_api") mkt.value = "tiktok"; else if (target.value === "sandbox") mkt.value = "sandbox"; drawCats(); drawMem(); };
+  mkt.onchange = () => { drawCats(); drawMem(); };
   const fbId = h("input", { placeholder: "ID kategori fallback", style: "width:150px" }), fbLabel = h("input", { placeholder: "label (opsional)" });
-  const catBox = h("div", {});
+  const catBox = h("div", {}), memBox = h("div", { class: "gap" });
+  async function drawMem() {
+    try {
+      const [info, fee] = await Promise.all([api("/api/categories/info"), api("/api/fees/profile?marketplace=" + (mkt.value === "sandbox" ? "shopee" : mkt.value))]);
+      const n = info[mkt.value] || 0;
+      memBox.replaceChildren(h("div", { class: "small" }, n ? "✅ Daftar kategori " + mkt.value + " tersimpan di aplikasi: " + n + " kategori (tidak perlu diunggah lagi)." : "⚠️ Daftar kategori " + mkt.value + " belum tersimpan — unggah SEKALI di Manage Tools → Kategori Marketplace."),
+        h("div", { class: "small" }, fee.customized ? "✅ Tarif biaya platform tersimpan." : "⚠️ Tarif biaya platform masih bawaan — unggah file tarif sekali di Collection Settings → 'Biaya platform'."));
+    } catch (e) { memBox.replaceChildren(); }
+  }
   async function drawCats() {
     const rows = await api("/api/collections/" + U.colId + "/categories?target=" + mkt.value);
     catBox.replaceChildren(h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Kategori sumber"), h("th", {}, "Produk"), h("th", {}, "ID kategori " + mkt.value))),
@@ -693,7 +725,8 @@ async function pgUploader(v, arg) {
   const catCsv = h("textarea", { style: "min-height:70px", placeholder: "id,path  contoh:\n100,Fashion Pria > Kaos" }), catFile = h("input", { type: "file", accept: ".csv,.tsv,.txt,.xlsx" });
   const suggest = () => guard(async () => { const r = await api("/api/collections/" + U.colId + "/suggest-categories", { marketplace: mkt.value, apply: true }); toast(r.applied + " kategori diisi otomatis (tetap ditinjau di preview)"); drawCats(); });
   const st3 = h("div", { class: "card step" }, h("h3", {}, h("span", {}, "3"), "Target & Kategori"), h("label", {}, "Tujuan", target), U.tab === "export" && h("label", { class: "gap" }, "Template", tpl), h("label", { class: "gap" }, "Marketplace (untuk mapping kategori)", mkt),
-    h("div", { class: "small mut gap" }, "Kategori mapping — isi ID dari panduan marketplace (jangan menebak):"), catBox,
+    memBox, h("div", { class: "small mut gap" }, "Kategori diisi OTOMATIS saat Preview (kata kunci + Gemini bila kunci terpasang) dari daftar resmi yang sudah tersimpan. Anda cukup memeriksanya di preview."),
+    h("details", { class: "gap" }, h("summary", {}, "Atur kategori manual per kategori sumber (opsional)"), catBox),
     h("div", { class: "row gap" }, h("button", { class: "sm pri", onclick: () => autoCatDialog(U.colId, mkt.value, drawCats) }, "✨ Isi kategori otomatis semua produk"), h("button", { class: "sm", onclick: suggest }, "Isi per kategori sumber")),
     h("details", { class: "gap" }, h("summary", {}, "Impor daftar kategori marketplace (berkas .xlsx/.csv atau tempel)"), h("div", { class: "row gap" }, catFile, h("button", { class: "sm pri", onclick: () => guard(async () => { const f = catFile.files[0]; if (!f) { toast("Pilih berkas dulu", true); return; } const r = await api("/api/categories/import-file", { marketplace: mkt.value, filename: f.name, dataBase64: await readB64(f) }); toast(r.imported + " kategori diimpor"); }) }, "⬆ Impor berkas")), catCsv, h("button", { class: "sm", onclick: () => guard(async () => { const r = await api("/api/categories/import", { marketplace: mkt.value, csvText: catCsv.value }); toast(r.imported + " kategori diimpor"); }) }, "Impor teks")), h("div", { class: "row gap" }, h("label", {}, "Kategori fallback", h("div", { class: "row" }, fbId, fbLabel))));
   body.append(h("div", { class: "steps" }, st1, st2, st3), h("div", { class: "row gap" }, h("span", { class: "grow" }),
@@ -703,10 +736,17 @@ async function pgUploader(v, arg) {
       if (U.tab === "direct") Object.assign(config, { delay_min: +dmin.value, delay_max: +dmax.value, pause_after_failures: +pause.value });
       if (U.tab === "export") config.template = tpl.value;
       if (fbId.value.trim()) config.default_category = { id: fbId.value.trim(), label: fbLabel.value.trim() };
+      if (target.value !== "sandbox") {  // kategori otomatis dari daftar tersimpan sebelum preview (Gemini bila kunci terpasang)
+        try {
+          const ai = ((await api("/api/ai")).providers || []).find(p => p.name === "gemini");
+          const r = await api("/api/collections/" + U.colId + "/auto-categories", { marketplace: mkt.value, useAi: !!(ai && ai.ready), apply: true, onlyUnmapped: true });
+          if (r.applied) toast(r.applied + " produk diberi kategori otomatis" + (r.summary.needsReview ? "; " + r.summary.needsReview + " perlu dipilih di langkah Atur manual" : ""));
+        } catch (e) { toast("Kategori otomatis dilewati: " + e.message, true); }
+      }
       const pv = await api("/api/batches", { collectionId: U.colId, target: target.value, selection: sel, config });
       previewDialog(pv, U.tab === "export");
     }) }, U.tab === "export" ? "PREVIEW EXPORT" : "PREVIEW UPLOAD")));
-  drawCats();
+  drawCats(); drawMem();
 }
 function previewDialog(pv, isExport) {
   const key = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2)).replace(/-/g, "");
@@ -717,7 +757,7 @@ function previewDialog(pv, isExport) {
     h("div", { class: "row gap" }, h("span", { class: "grow" }), h("button", { onclick: closeModal }, "Batal"),
       h("button", { class: "pri", disabled: !pv.valid, onclick: () => guard(async () => {
         const r = await api("/api/batches/" + pv.batchId + "/confirm", { confirm: true, idempotencyKey: key, previewHash: pv.previewHash });
-        closeModal(); toast("Proses dijalankan… Cek Process Monitor"); location.hash = "#/monitor/upload-" + pv.batchId;
+        closeModal(); toast(r.status === "AWAITING_FILL" ? "Antrean siap di ekstensi — buka Seller Center, klik ikon CANDRA, lalu 'Isi form'." : "Proses dijalankan… Cek Process Monitor"); location.hash = "#/monitor/upload-" + pv.batchId;
       }) }, "KONFIRMASI & MULAI (" + pv.valid + ")"))), true);
 }
 
@@ -765,18 +805,8 @@ async function pgMonitor(v, arg) {
   every(2000, () => guard(async () => { await drawList(); await drawRight(false); }));
 }
 
-/* ---------------- Manage Tools (Scrap Plugins = allowlist sumber) ---------------- */
+/* ---------------- Manage Tools (kategori marketplace & biaya platform) ---------------- */
 async function pgTools(v) {
-  const draw = async () => {
-    const src = await api("/api/sources");
-    const dom = h("input", { placeholder: "supplier.contoh.com" }), note = h("input", { placeholder: "Catatan izin (wajib): mis. 'feed resmi, disetujui 2026-10-01'", style: "width:100%" });
-    box.replaceChildren(h("div", { class: "note" }, "Website yang Dapat di-Grab: hanya domain yang Anda daftarkan di sini (dengan catatan izin). Marketplace publik (Shopee/Tokopedia/TikTok) tidak tersedia sebagai sumber scraping — gunakan CSV/feed supplier atau API resmi."),
-      h("table", { class: "gap" }, h("thead", {}, h("tr", {}, h("th", {}, "Domain"), h("th", {}, "Platform"), h("th", {}, "Catatan izin"), h("th", {}, ""))),
-        h("tbody", {}, ...src.map(s => h("tr", {}, h("td", {}, s.domain), h("td", {}, s.platform), h("td", { class: "small mut" }, s.permission_note), h("td", {}, h("button", { class: "sm danger", onclick: () => guard(async () => { await api("/api/sources/remove", { domain: s.domain }); draw(); }) }, "Hapus")))))),
-      src.length ? null : h("div", { class: "mut small" }, "Belum ada domain."),
-      h("h3", { class: "gap" }, "Tambah sumber"), h("div", { class: "row" }, dom, h("div", { class: "grow" }, note), h("button", { class: "pri", onclick: () => guard(async () => { await api("/api/sources", { platform: "web_jsonld", domain: dom.value, permissionNote: note.value }); toast("Domain ditambahkan"); draw(); }) }, "Tambah")));
-  };
-  const box = h("div", { class: "card" });
   const catCard = h("div", { class: "card gap" });
   const drawCat = async () => {
     const ov = await api("/api/categories/overview");
@@ -797,7 +827,7 @@ async function pgTools(v) {
       h("div", { class: "small mut gap" }, "Atau tempel teks di bawah (id,path):"), csv, h("div", { class: "row gap" }, h("button", { class: "pri", onclick: () => guard(async () => { const r = await api("/api/categories/import", { marketplace: mk.value, csvText: csv.value }); toast(r.imported + " kategori diimpor"); drawCat(); }) }, "Impor / ganti daftar"), test), testOut,
       h("div", { class: "small mut gap" }, "Setelah impor: Uploader → langkah 3 → \"Isi kategori otomatis semua produk\"."));
   };
-  v.append(h("h2", {}, "Manage Tools — Scrap Plugins"), box, catCard); await draw(); await drawCat();
+  v.append(h("h2", {}, "Manage Tools"), catCard); await drawCat();
 }
 
 /* ---------------- Settings ---------------- */
@@ -864,7 +894,7 @@ async function pgSettings(v) {
 /* ---------------- Help ---------------- */
 function pgHelp(v) {
   v.append(h("h2", {}, "Bantuan"), h("div", { class: "card" }, h("ol", {},
-    h("li", {}, "Manage Tools: daftarkan domain supplier yang BERIZIN (atau pakai CSV feed)."), h("li", {}, "Grabber: tempel URL (prefix N- untuk batas jumlah produk), VALIDASI URL, lalu START GRAB."),
+    h("li", {}, "Manage Tools: unggah daftar kategori marketplace sekali (tersimpan permanen)."), h("li", {}, "Grabber: tempel URL (prefix N- untuk batas jumlah produk), VALIDASI URL, lalu START GRAB."),
     h("li", {}, "Save to Collections: beri nama hasil grab agar masuk Library."), h("li", {}, "Collections: Bulk Editor, AI Optimize, Analisis & Bersihkan, hapus duplikat, Collection Settings."),
     h("li", {}, "Uploader: Direct Upload (konektor resmi) atau Export Data (CSV mass-upload). Selalu ada Preview + konfirmasi manusia sebelum kirim."), h("li", {}, "Process Monitor: pantau log tiap proses, ulangi yang gagal.")),
     h("div", { class: "note gap" }, "Pintasan: CTRL+Enter di kotak URL = START GRAB. CAPTCHA/403 menghentikan proses (tidak dilewati). Semua data tetap di komputer Anda (folder data/).")));

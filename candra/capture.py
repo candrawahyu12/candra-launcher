@@ -12,6 +12,7 @@ from typing import Optional
 from urllib.parse import urlsplit
 
 from .adapters import blank_product, validate_product
+from .browsergrab import filter_reason
 from .db import DB
 from .jobs import upsert_product
 from .util import now, parse_int, parse_price, redact
@@ -25,6 +26,10 @@ _SHOPEE_ID = re.compile(r"(?:-i\.|/product/)(\d+)[./](\d+)")
 
 
 class CaptureError(ValueError):
+    pass
+
+
+class _KeepDetail(Exception):
     pass
 
 
@@ -142,14 +147,11 @@ def normalize(raw: dict) -> tuple[str, dict]:
     return plat, p
 
 
-def capture_items(db: DB, items: list, rights: str = "unverified") -> dict:
-    if not isinstance(items, list) or not items:
-        raise CaptureError("tidak ada item")
-    if len(items) > MAX_ITEMS:
-        raise CaptureError(f"maksimal {MAX_ITEMS} item per kiriman")
-    # sesi capture: kiriman berdekatan masuk ke satu "Grab Process" yang belum disimpan
+def _session_job(db: DB, rights: str) -> dict:
+    """Kiriman manual (tombol di halaman): kiriman berdekatan masuk ke satu 'Grab Process' yang belum disimpan."""
     job = db.one("SELECT j.id, j.collection_id FROM scrape_jobs j JOIN collections c ON c.id=j.collection_id"
-                 " WHERE j.source_platform='browser_capture' AND c.status='staging' AND j.archived=0 ORDER BY j.id DESC LIMIT 1")
+                 " WHERE j.source_platform='browser_capture' AND j.input_mode='capture' AND c.status='staging' AND j.archived=0"
+                 " ORDER BY j.id DESC LIMIT 1")
     if job:
         last = db.one("SELECT MAX(finished_at) t FROM scrape_job_items WHERE job_id=?", (job["id"],))["t"] or ""
         from datetime import datetime, timezone
@@ -169,7 +171,27 @@ def capture_items(db: DB, items: list, rights: str = "unverified") -> dict:
         db.execute("UPDATE collections SET source_job_id=?, name=? WHERE id=?", (jid, f"__grab_{jid}", cid))
         db.event("scrape", jid, "info", "JOB_CREATED", "browser_capture: dikirim dari ekstensi Chrome")
         job = {"id": jid, "collection_id": cid}
-    saved = updated = same = 0
+    return job
+
+
+def capture_items(db: DB, items: list, rights: str = "unverified", job_id: Optional[int] = None) -> dict:
+    if not isinstance(items, list) or not items:
+        raise CaptureError("tidak ada item")
+    if len(items) > MAX_ITEMS:
+        raise CaptureError(f"maksimal {MAX_ITEMS} item per kiriman")
+    filters: dict = {}
+    if job_id is not None:  # kiriman dari antrean Grabber: masuk ke job itu (bukan sesi liar)
+        job = db.one("SELECT id, collection_id, options_json, filters_json, status FROM scrape_jobs WHERE id=? AND source_platform='browser_capture'"
+                     " AND archived=0", (int(job_id),))
+        if not job:
+            raise CaptureError("job Grabber tidak ditemukan")
+        if job["status"] == "cancelled":
+            raise CaptureError("job Grabber sudah dibatalkan")
+        rights = (json.loads(job["options_json"] or "{}")).get("rights_declaration", rights)
+        filters = json.loads(job["filters_json"] or "{}")
+    else:
+        job = _session_job(db, rights)
+    saved = updated = same = skipped = 0
     failed: list[dict] = []
     for raw in items:
         try:
@@ -177,6 +199,22 @@ def capture_items(db: DB, items: list, rights: str = "unverified") -> dict:
             errors, warnings = validate_product(p)
             if errors:
                 raise CaptureError(",".join(errors))
+            if raw.get("partial"):  # kartu daftar tidak boleh menimpa data detail (varian/deskripsi) yang sudah ada
+                old = db.one("SELECT raw_data_json FROM products WHERE source_platform=? AND source_product_id=?", (plat, p["source_product_id"]))
+                try:
+                    if old and not (json.loads(old["raw_data_json"] or "{}").get("extra") or {}).get("partial", True):
+                        raise _KeepDetail()
+                except (ValueError, TypeError):
+                    pass
+            why = filter_reason(p, filters) if filters and not raw.get("partial") else None
+            if why:
+                db.execute("INSERT INTO scrape_job_items(job_id, input_url, product_url, canonical_id, status, attempt_count, error_code,"
+                           " started_at, finished_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(job_id, canonical_id) DO UPDATE SET"
+                           " status=excluded.status, finished_at=excluded.finished_at",
+                           (job["id"], p["source_url"], p["source_url"], f"{plat}:{p['source_product_id']}", "skipped_filtered", 1,
+                            "FILTER_" + why.upper(), now(), now()))
+                skipped += 1
+                continue
             pid, st = upsert_product(db, plat, p, rights)
             db.execute("INSERT OR IGNORE INTO collection_products(collection_id, product_id, position, created_at) VALUES(?,?,"
                        "(SELECT COALESCE(MAX(position),0)+1 FROM collection_products WHERE collection_id=?),?)",
@@ -191,6 +229,9 @@ def capture_items(db: DB, items: list, rights: str = "unverified") -> dict:
             title = p["title"]
             canon = f"{plat}:{p['source_product_id']}"
             url = p["source_url"]
+        except _KeepDetail:
+            same += 1
+            continue
         except (CaptureError, ValueError, KeyError) as e:
             st, code, msg, title, url = "failed", "CAPTURE_INVALID", str(e), str((raw or {}).get("title", ""))[:70] if isinstance(raw, dict) else "", \
                 str((raw or {}).get("url", ""))[:200] if isinstance(raw, dict) else ""
@@ -202,4 +243,4 @@ def capture_items(db: DB, items: list, rights: str = "unverified") -> dict:
                    (job["id"], url, url, canon, st, 1, code, redact(msg) if msg else None, now(), now()))
         db.event("scrape", job["id"], "warning" if st == "failed" else "info", "ITEM_" + st.upper(),
                  f"{(title or url)[:70]} - {st}" + (f" ({msg})" if msg and st == "failed" else ""))
-    return {"jobId": job["id"], "saved": saved, "updated": updated, "unchanged": same, "failed": failed}
+    return {"jobId": job["id"], "saved": saved, "updated": updated, "unchanged": same, "skipped": skipped, "failed": failed}

@@ -107,6 +107,12 @@ def parse_category_rows(rows: list[list[str]]) -> list[tuple[str, str]]:
                 out.append((cid, path))
         return out
     for r in rows:
+        packed = next((re.fullmatch(r"(\d{3,12})\s*[-–:|]\s*(\D.{2,280})", c) for c in r[:3] if re.fullmatch(r"\d{3,12}\s*[-–:|]\s*\D.{2,280}", c)), None)
+        if packed:  # satu sel "100635 - Fashion Pria/Atasan/Kaos"
+            path = " > ".join(x.strip() for x in re.split(r"\s*[>/]\s*", packed.group(2)) if x.strip())
+            if path:
+                out.append((packed.group(1), path))
+            continue
         idx = next((j for j, c in enumerate(r[:3]) if re.fullmatch(r"\d{3,12}", c)), None)
         if idx is None:
             continue
@@ -119,7 +125,48 @@ def parse_category_rows(rows: list[list[str]]) -> list[tuple[str, str]]:
         path = " > ".join(parts)
         if path and len(path) <= 300:
             out.append((cid, path))
+    if len(out) < 2:
+        alt = _parse_anywhere(rows)
+        if len(alt) > len(out):
+            return alt
     return out
+
+
+def _parse_anywhere(rows: list[list[str]]) -> list[tuple[str, str]]:
+    """Cadangan: kolom ID boleh di mana saja (mis. paling kanan setelah kolom level) dan sel level kosong mewarisi baris di atasnya
+    (sel gabungan). Hanya kategori daun yang dikembalikan."""
+    width = max((len(r) for r in rows), default=0)
+    best, best_n = None, 0
+    for j in range(width):
+        n = sum(1 for r in rows if j < len(r) and re.fullmatch(r"\d{3,12}", r[j]))
+        if n > best_n:
+            best, best_n = j, n
+    if best is None or best_n < 2:
+        return []
+    found, prev = {}, []
+    for r in rows:
+        if best >= len(r) or not re.fullmatch(r"\d{3,12}", r[best]):
+            continue
+        cells = [c if (c and not re.fullmatch(r"[\d.,\s]+", c)) else "" for j, c in enumerate(r) if j != best]
+        while cells and not cells[-1]:
+            cells.pop()
+        merged = list(cells)
+        for k, c in enumerate(merged):  # warisi sel kosong di kiri dari baris sebelumnya
+            if c:
+                break
+            if k < len(prev):
+                merged[k] = prev[k]
+        parts = []
+        for c in merged:
+            parts += [x.strip() for x in re.split(r"\s*>\s*", c) if x.strip()]
+        if not parts:
+            continue
+        prev = merged
+        path = " > ".join(parts)
+        if len(path) <= 300:
+            found[r[best]] = path
+    paths = list(found.values())
+    return [(i, pth) for i, pth in found.items() if not any(o != pth and o.startswith(pth + " > ") for o in paths)]
 
 
 def _match(q: str, t: str) -> bool:

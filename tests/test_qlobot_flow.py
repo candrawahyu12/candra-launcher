@@ -136,10 +136,9 @@ class WebFlowTests(unittest.TestCase):
         a = "https://supplier.example.com/p/1"
         pages = {a: product_page("S1", "Kaos Merah", 50000), "https://supplier.example.com/p/2": product_page("S2", "Celana Biru", 90000)}
         svc = make_svc(fetch_override=FakeWeb(pages))
-        svc.add_source("web_jsonld", "supplier.example.com", "izin tercatat")
         v = svc.validate_urls("web_jsonld", "detail_urls", [a, "5-http://127.0.0.1/x", "salah", "https://evil.example.org/p"])
-        self.assertEqual(v["valid"], 1)
-        self.assertEqual(v["invalid"], 3)
+        self.assertEqual(v["valid"], 2)  # tanpa allowlist: domain publik mana pun lolos; IP loopback & teks ngawur tidak
+        self.assertEqual(v["invalid"], 2)
         j = svc.create_scrape_job(source_platform="web_jsonld", input_mode="detail_urls",
                                   inputs={"urls": list(pages)}, filters={"titleContains": "kaos"})
         svc.jobs.run_pending()
@@ -914,7 +913,7 @@ class GeminiKeyAndQuotaTests(unittest.TestCase):
             g2 = GeminiProvider(transport=tr_all, sleep=lambda s: None)
             with self.assertRaises(ValueError) as cm:
                 g2.complete("x")
-            self.assertIn("kuota Gemini habis", str(cm.exception)); self.assertIn("gemini-2.5-flash-lite", str(cm.exception))
+            self.assertIn("Google menolak semua model", str(cm.exception)); self.assertIn("gemini-2.5-flash-lite", str(cm.exception))
         finally:
             os.environ.pop("GEMINI_API_KEY", None)
 
@@ -1100,11 +1099,11 @@ class ImageGeminiOcrTests(unittest.TestCase):
             imgmod._tesseract = lambda path: None
             svc.providers["gemini"].min_interval = 0.0
             try:
-                    svc.providers["gemini"].transport = lambda u, h, b: _gem(json.dumps({"teks": "Toko Maju Jaya WA 0812-3456-7890 Shopee"}))
+                    svc.providers["gemini"].transport = lambda u, h, b: _gem(json.dumps({"foto": [{"n": i, "teks": "Toko Maju Jaya WA 0812-3456-7890 Shopee"} for i in range(5)]}))
                     r = svc.process_images(col, "shopee", gemini_ocr=True)
                     self.assertGreater(r["counts"].get("REVIEW", 0), 0)
                     self.assertTrue(r["geminiOcrUsed"])
-                    svc.providers["gemini"].transport = lambda u, h, b: _gem(json.dumps({"teks": ""}))
+                    svc.providers["gemini"].transport = lambda u, h, b: _gem(json.dumps({"foto": [{"n": i, "teks": ""} for i in range(5)]}))
                     r2 = svc.process_images(col, "shopee", force=True, gemini_ocr=True)
                     self.assertEqual(r2["counts"].get("REVIEW", 0), 0)
                     r3 = svc.process_images(col, "shopee", force=True)           # tanpa OCR -> UNCHECKED
@@ -1165,3 +1164,25 @@ class BrandCleanTests(unittest.TestCase):
         row = svc.db.one("SELECT title_original, title_edited FROM products")
         self.assertNotIn("oxide", row["title_edited"].lower()); self.assertIn("2 Liter", row["title_edited"])
         self.assertIn("Oxide", row["title_original"])
+
+
+class V013Tests(unittest.TestCase):
+    def test_category_id_last_column_and_title_rows(self):
+        from candra import categories as c
+        a = c.parse_category_rows([["Kategori 1", "Kategori 2", "Kategori 3", "ID"], ["Fashion Pria", "Atasan", "Kaos", 101],
+                                   ["", "", "Kemeja", 102], ["Rumah Tangga", "Dapur", "Panci", 201]])
+        self.assertEqual(dict(a)["102"], "Fashion Pria > Atasan > Kemeja")
+        self.assertEqual(len(a), 3)
+        b = c.parse_category_rows([["Daftar kategori"], [], ["No", "Level 1", "Level 2", "Category ID"], [1, "Fashion", "Kaos", 101], [2, "Fashion", "Kemeja", 102]])
+        self.assertEqual(len(b), 2)
+
+    def test_orphan_wa_removed_and_welcome(self):
+        from candra.analyzer import clean_text, CLEANABLE
+        out, _ = clean_text("Selamat datang di toko kami! Merk: CTA. Botol 2 liter. WA 08123456789", list(CLEANABLE))
+        self.assertEqual(out, "Botol 2 liter.")
+
+    def test_all_brand_candidates_removed_automatically(self):
+        from candra.analyzer import brand_candidates
+        w = {b["word"] for b in brand_candidates(["Oxide Alat Semprot 2 liter", "Oxide Penghitam Body", "Accp Kepala Pompa", "YEEXi Sprayer"])}
+        self.assertTrue({"Oxide", "Accp", "YEEXi"} <= w)
+        self.assertNotIn("Body", w)

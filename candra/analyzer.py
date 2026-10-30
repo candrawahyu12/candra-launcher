@@ -20,6 +20,28 @@ PROMO_PHRASES = ["follow toko", "follow kami", "chat admin", "chat kami", "hubun
                  "order sekarang", "pesan sekarang", "beli sekarang", "hubungi admin", "chat dulu", "silakan chat", "silahkan chat",
                  "tanyakan stok", "follow dulu", "kunjungi toko kami", "klik keranjang", "tinggalkan ulasan", "beri bintang 5", "jangan ragu chat"]
 PROMO = re.compile("(?i)(?:" + "|".join(re.escape(p) for p in PROMO_PHRASES) + ")")
+# sapaan/identitas toko supplier: "Selamat datang di toko kami", "Terima kasih sudah berbelanja", "kami adalah ...", "dropship welcome"
+WELCOME = re.compile(r"(?i)(?:selamat\s+(?:datang|berbelanja|belanja)|welcome\s+to|thank(?:s|\s+you)\s+(?:for|sudah)|terima\s*kasih\s+(?:telah|sudah|atas|banyak|sdh)|"
+                     r"(?:toko|store|shop|olshop|lapak|gudang)\s+(?:kami|ini|official)|official\s+(?:store|shop)|kami\s+(?:adalah|menyediakan|menjual|jual|siap|hadir|memproduksi)|"
+                     r"(?:dropship(?:per)?|reseller|agen|grosir)\s*(?:dan|&|/|,)?\s*(?:dropship(?:per)?|reseller|agen|grosir)?\s*(?:welcome|diterima|dipersilakan|dipersilahkan)|"
+                     r"terima\s+(?:dropship|reseller|grosir|partai)|(?:halo|hai|hi)\s+(?:kak|bestie|sobat)|dear\s+(?:customer|buyer)|kakak\s+yang\s+baik|"
+                     r"happy\s+shopping|selamat\s+bergabung|cek\s+(?:toko|etalase)\s+kami|produk\s+lain\s+(?:di|dari)\s+toko)")
+BRAND_LABEL = re.compile(r"(?i)(?<![\w])(?:merk|merek|brand|nama\s+toko|toko|store|supplier|pemasok|produsen|manufacturer)\s*[:=]\s*[^\n,;|/]{1,40}")
+_TAG_HEAD = re.compile(r"^\s*([\[\(【][^\]\)】]{1,28}[\]\)】])\s*")
+_TAG_TAIL = re.compile(r"\s*([\[\(【][^\]\)】]{1,28}[\]\)】])\s*$")
+
+
+def strip_edge_tags(text: str) -> tuple[str, list[str]]:
+    """Buang tag [..] / (..) di AWAL & AKHIR judul satu per satu ([TOP], [READY STOCK]); tag yang memuat ukuran/spesifikasi dipertahankan."""
+    gone: list[str] = []
+    for rx in (_TAG_HEAD, _TAG_TAIL):
+        while True:
+            m = rx.search(text)
+            if not m or SPEC_TOKEN.search(m.group(1)) or len(text[:m.start()] + text[m.end():]) < 3:
+                break
+            gone.append(m.group(1))
+            text = (text[:m.start()] + " " + text[m.end():]).strip() if rx is _TAG_HEAD else text[:m.start()].rstrip()
+    return text.strip(), gone
 
 _SPEC_UNIT = r"(?:cm|mm|kg|gr|gram|ml|liter|watt|mah|gb|tb|inch|pcs|pack|volt|hz)"
 SPEC_TOKEN = re.compile(rf"(?i)(?<![\w])\d+(?:[.,]\d+)?\s?{_SPEC_UNIT}\b")
@@ -28,9 +50,9 @@ SPEC_WORD = re.compile(r"(?i)\b(ukuran|bahan|material|isi paket|garansi|kompatib
 
 MARKETPLACE_NAMES = ["shopee", "shopeepay", "tokopedia", "tiktok shop", "tiktokshop", "tiktok", "lazada", "bukalapak", "blibli", "olx", "alibaba", "aliexpress", "1688", "taobao"]
 MARKETPLACE = re.compile(r"(?i)(?<![\w])(?:" + "|".join(re.escape(n) for n in sorted(MARKETPLACE_NAMES, key=len, reverse=True)) + r")(?![\w])")
-SUPPLIER_KINDS = ("phone", "url", "email", "handle", "contact_label", "marketplace")  # penanda data supplier: memblokir upload
+SUPPLIER_KINDS = ("phone", "url", "email", "handle", "contact_label", "marketplace", "brand_label")  # penanda data supplier: memblokir upload
 
-CLEANABLE = ("marketplace", "phone", "url", "email", "handle", "contact_label", "promo", "shop_name", "repeated_sentence")
+CLEANABLE = ("marketplace", "phone", "url", "email", "handle", "contact_label", "promo", "welcome", "brand_label", "title_tag", "shop_name", "repeated_sentence")
 _SENT_SPLIT = re.compile(r"([.!?]+(?=\s|$)|\n+)")
 
 
@@ -55,8 +77,8 @@ def _sentences(text: str) -> list[tuple[str, str]]:
     return out
 
 
-def analyze_text(text: str, shop_names: Iterable[str] = ()) -> dict:
-    """Deteksi saja — tidak mengubah teks."""
+def analyze_text(text: str, shop_names: Iterable[str] = (), title_len: int = 0) -> dict:
+    """Deteksi saja — tidak mengubah teks. title_len>0: karakter awal teks adalah JUDUL (untuk deteksi tag [..] di awal/akhir judul)."""
     text = text or ""
     agg: dict[tuple[str, str], int] = Counter()
 
@@ -64,9 +86,12 @@ def analyze_text(text: str, shop_names: Iterable[str] = ()) -> dict:
         agg[(kind, m.strip().lower())] += 1
 
     for kind, rx in (("phone", PHONE), ("url", URL), ("email", EMAIL), ("handle", HANDLE), ("contact_label", CONTACT_LABEL),
-                     ("promo", PROMO), ("marketplace", MARKETPLACE)):
+                     ("promo", PROMO), ("welcome", WELCOME), ("brand_label", BRAND_LABEL), ("marketplace", MARKETPLACE)):
         for m in rx.finditer(text):
             add(kind, m.group(0))
+    if title_len:
+        for g in strip_edge_tags(text[:title_len])[1]:
+            add("title_tag", g)
     shop_rx = _shop_regex(shop_names)
     if shop_rx:
         for m in shop_rx.finditer(text):
@@ -94,7 +119,7 @@ def spec_tokens(text: str) -> set[str]:
     return {re.sub(r"\s+", "", m.group(0).lower()).replace(",", ".") for m in SPEC_TOKEN.finditer(text or "")}
 
 
-def clean_text(text: str, types: Iterable[str], shop_names: Iterable[str] = ()) -> tuple[str, list[dict]]:
+def clean_text(text: str, types: Iterable[str], shop_names: Iterable[str] = (), is_title: bool = False) -> tuple[str, list[dict]]:
     """Bersihkan hanya jenis temuan yang dipilih. Return (teks_bersih, daftar_yang_dihapus) untuk jejak audit."""
     types = set(types) & set(CLEANABLE)
     removed: list[dict] = []
@@ -102,7 +127,10 @@ def clean_text(text: str, types: Iterable[str], shop_names: Iterable[str] = ()) 
         return text or "", removed
     shop_rx = _shop_regex(shop_names) if "shop_name" in types else None
     # contact_label dulu: "WA: 0812..." dibuang utuh (label + nomor), baru jenis lain
-    span_rules = [(k, rx) for k, rx in (("contact_label", CONTACT_LABEL), ("phone", PHONE), ("url", URL), ("email", EMAIL), ("handle", HANDLE),
+    if is_title and "title_tag" in types:
+        text, gone = strip_edge_tags(text)
+        removed += [{"type": "title_tag", "text": g} for g in gone]
+    span_rules = [(k, rx) for k, rx in (("brand_label", BRAND_LABEL), ("contact_label", CONTACT_LABEL), ("phone", PHONE), ("url", URL), ("email", EMAIL), ("handle", HANDLE),
                                         ("marketplace", MARKETPLACE)) if k in types]
     if shop_rx:
         span_rules.append(("shop_name", shop_rx))
@@ -120,12 +148,21 @@ def clean_text(text: str, types: Iterable[str], shop_names: Iterable[str] = ()) 
             for m in PROMO.finditer(body):
                 removed.append({"type": "promo", "text": m.group(0)})
             body = PROMO.sub("", body)
+        if "welcome" in types and WELCOME.search(body):
+            if not protected:
+                removed.append({"type": "welcome", "text": original_body.strip()})
+                continue
+            for m in WELCOME.finditer(body):
+                removed.append({"type": "welcome", "text": m.group(0)})
+            body = WELCOME.sub("", body)
         for kind, rx in span_rules:
             for m in rx.finditer(body):
                 removed.append({"type": kind, "text": m.group(0)})
             body = rx.sub("", body)
         if "contact_label" in types:
             body = ORPHAN_LABEL.sub("", body)  # label tanpa isi ("WA:") sisa dari pembersihan lain
+            if any(r["type"] in ("phone", "url", "handle") for r in removed):
+                body = re.sub(r"(?i)\b(?:wa|whatsapp|telp|tlp|hp|call)\b[\s.,;:\-]*$", "", body)
         if "repeated_sentence" in types and len(key.split()) >= 4:
             if key in seen_sentences:
                 removed.append({"type": "repeated_sentence", "text": original_body.strip()})
@@ -164,7 +201,11 @@ sampo shampoo cairan obat vitamin suplemen kopi teh susu biskuit kue snack makan
 tanaman bunga pot vas hiasan dekorasi kain bahan benang jarum payung jas hujan helm sarung motor mobil sepeda lap kanebo microfiber cuci cleaner
 original ori murah grosir promo terlaru terbaru termurah hot sale baru new best premium super jumbo besar kecil mini ukuran warna kuning merah biru
 hijau hitam putih abu coklat pink ungu orange oranye multifungsi serbaguna anti tahan air tekanan tinggi high pressure the for and with untuk dan
-dengan isi pcs pack liter ltr ml gram kg cm mm""".split())
+dengan isi pcs pack liter ltr ml gram kg cm mm penyemprot penyemprotan semprot semprotan tanaman taman kebun burung motor mobil kaca body bodi
+remover repellent pembersih pengkilap penghitam pelumas pewangi stik stick kepala nozzle tekanan tinggi panjang pendek model type tipe jenis bahan
+plastik besi stainless kayu karet silikon kulit katun polos motif anak dewasa pria wanita cowok cewek unisex bayi ibu rumah tangga dapur kamar mandi
+gantungan hanger rak organizer lipat gulung set paket kit bundle isi multi serbaguna praktis simple elegan kekinian viral trending favorit pilihan
+ready stock siap kirim gratis ongkir cod murah diskon sale promo original asli import lokal garansi""".split())
 
 
 def brand_candidates(titles: Iterable[str], limit: int = 12) -> list[dict]:
@@ -183,4 +224,20 @@ def brand_candidates(titles: Iterable[str], limit: int = 12) -> list[dict]:
             continue
         counts[w] += 1
         example.setdefault(w, (t or "")[:70])
-    return [{"word": w, "count": n, "example": example[w]} for w, n in counts.most_common(limit)]
+    def strong(w: str, n: int) -> bool:
+        """Yakin merek: muncul di >=3 judul (kata pertama yang sama berulang), atau bentuknya khas merek (HURUF BESAR 3-8, atau campuran besar-kecil seperti YEEXi)."""
+        core = w.strip(".-")
+        odd = (core.isupper() and 3 <= len(core) <= 8 and core.isalpha()) or (any(c.isupper() for c in core[1:]) and any(c.islower() for c in core))
+        return n >= 3 or odd
+    return [{"word": w, "count": n, "example": example[w], "strong": strong(w, n)} for w, n in counts.most_common(limit)]
+
+
+def strip_words(text: str, words: Iterable[str]) -> str:
+    """Hapus kata/merek (batas kata, tanpa huruf besar/kecil) dari teks, lalu rapikan spasi & tanda baca di tepi."""
+    rx = _shop_regex(words)
+    if not rx or not text:
+        return text or ""
+    out = rx.sub(" ", text)
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    out = re.sub(r"\s+([,.;:!?])", r"\1", out)
+    return re.sub(r"^[\s.,;:\-|/]+|[\s,;:\-|/]+$", "", out).strip()

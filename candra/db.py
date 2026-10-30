@@ -271,6 +271,21 @@ MIGRATIONS = [
         PRIMARY KEY(product_id, marketplace)
     );
     """,
+    # ---- v8: antrean ambil-data lewat ekstensi di Chrome pengguna (Shopee/Tokopedia) ----
+    """
+    CREATE TABLE grab_queue(
+        id INTEGER PRIMARY KEY,
+        job_id INTEGER NOT NULL REFERENCES scrape_jobs(id),
+        url TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        limit_n INTEGER,
+        status TEXT NOT NULL DEFAULT 'pending',
+        note TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+        UNIQUE(job_id, url)
+    );
+    """,
 ]
 
 

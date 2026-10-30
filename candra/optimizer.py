@@ -70,6 +70,8 @@ class GeminiProvider(AIProvider):
         # jeda minimal antar panggilan (kuota gratis ketat per menit); tes memakai transport palsu -> tanpa jeda
         self.min_interval = (4.0 if transport is None else 0.0) if min_interval is None else min_interval
         self._last = 0.0
+        self._quota_block_until = 0.0
+        self._quota_block_msg = ""
 
     @staticmethod
     def key_configured() -> bool:
@@ -86,7 +88,7 @@ class GeminiProvider(AIProvider):
         except urllib.error.HTTPError as e:
             detail = ""
             try:
-                detail = str((json.loads(e.read(4000).decode("utf-8", "replace")).get("error") or {}).get("message", ""))[:160]
+                detail = str((json.loads(e.read(4000).decode("utf-8", "replace")).get("error") or {}).get("message", ""))[:600]
             except Exception:  # noqa: BLE001
                 pass
             key = os.environ.get("GEMINI_API_KEY", "").strip()
@@ -122,6 +124,27 @@ class GeminiProvider(AIProvider):
                 self.sleep(wait)
         self._last = time.monotonic()
 
+    def _with_retry(self, attempt, model: str) -> dict:
+        """503 (server sibuk): ulangi 3x dengan jeda 3/6/12 detik. 429 dengan 'retry in Ns' pendek (<=40 dtk): tunggu sekali, ulangi."""
+        waits = [3, 6, 12] if self.min_interval > 0 else [0, 0, 0]
+        retried_quota = False
+        tries = 0
+        while True:
+            try:
+                return attempt(model)
+            except ValueError as e:
+                msg = str(e)
+                if msg.startswith("AI_HTTP_503") and tries < len(waits):
+                    self.sleep(waits[tries]); tries += 1
+                    continue
+                if msg.startswith("AI_HTTP_429") and not retried_quota and self.min_interval > 0:
+                    m = re.search(r"retry in ([\d.]+)\s*s", msg, re.I)
+                    if m and float(m.group(1)) <= 40:
+                        retried_quota = True
+                        self.sleep(float(m.group(1)) + 1)
+                        continue
+                raise
+
     def _call(self, body: dict) -> dict:
         """POST generateContent. 404 (model tidak ada): coba model hasil ListModels + alias. 429 (kuota habis): kuota Gemini gratis
         dihitung PER MODEL, jadi coba model lain (flash-lite dsb.) sebelum menyerah. Model yang berhasil diingat selama aplikasi
@@ -145,7 +168,7 @@ class GeminiProvider(AIProvider):
                 if m in tried:
                     continue
                 try:
-                    out = attempt(m)
+                    out = self._with_retry(attempt, m)
                 except ValueError as e:
                     msg = str(e)
                     if msg.startswith("AI_HTTP_404"):
@@ -154,11 +177,16 @@ class GeminiProvider(AIProvider):
                     if msg.startswith("AI_HTTP_429"):
                         quota_hit, first_err = True, first_err or msg
                         continue
+                    if msg.startswith("AI_HTTP_503"):
+                        first_err = first_err or msg
+                        continue
                     raise
                 self.model = m
                 return out
             return None
 
+        if self._quota_block_until > time.monotonic():
+            raise ValueError(self._quota_block_msg)
         out = run([self.model])
         if out is not None:
             return out
@@ -174,11 +202,31 @@ class GeminiProvider(AIProvider):
             out = run(self.QUOTA_FALLBACK_MODELS)
             if out is not None:
                 return out
-            raise ValueError("AI_HTTP_429 - kuota Gemini habis di semua model yang dicoba (" + ", ".join(tried) +
-                             "). Kuota gratis dibatasi per menit & per hari: tunggu 1-2 menit lalu coba lagi, kurangi jumlah produk, "
-                             "pakai kunci dari akun/proyek Google lain, atau aktifkan penagihan di Google AI Studio. Detail: " + (first_err or "")[:160])
+            msg = self.quota_message(tried, first_err or "")
+            if self.min_interval > 0:  # jangan menghajar server lagi; permintaan berikutnya langsung gagal cepat selama 45 detik
+                self._quota_block_until = time.monotonic() + 45
+                self._quota_block_msg = msg
+            raise ValueError(msg)
+        if (first_err or "").startswith("AI_HTTP_503"):
+            out = run(self.QUOTA_FALLBACK_MODELS)
+            if out is not None:
+                return out
+            raise ValueError("AI_HTTP_503 - server Gemini sedang sibuk (bukan salah kunci/kuota Anda). Aplikasi sudah mencoba ulang beberapa kali "
+                             "dan model cadangan; tunggu 1-2 menit lalu coba lagi.")
         raise ValueError("AI_HTTP_404 - tidak ada model Gemini yang bisa dipakai untuk kunci ini (dicoba: " + ", ".join(tried) +
                          "). Periksa kunci API di aistudio.google.com, atau isi CANDRA_GEMINI_MODEL di candra.env")
+
+    @staticmethod
+    def quota_message(tried: list, detail: str) -> str:
+        d = detail.lower()
+        base = "AI_HTTP_429 - Google menolak semua model (" + ", ".join(tried) + "). "
+        if "limit: 0" in d or "limit:0" in d:
+            base += ("Pesan Google menyebut jatah (limit) = 0: kunci/proyek ini TIDAK punya jatah gratis sama sekali (bukan 'habis dipakai'). "
+                     "Ganti akun tidak membantu bila proyeknya sama jenisnya. Solusi: buat kunci baru di aistudio.google.com lewat 'Create API key' "
+                     "pada PROYEK BARU, atau aktifkan penagihan (billing) di proyek itu. ")
+        else:
+            base += ("Jatah gratis dibatasi per menit dan per hari per model; tunggu 1-2 menit lalu coba lagi dan kurangi jumlah produk per proses. ")
+        return base + "Pesan asli Google: " + detail[:400]
 
     def generate(self, parts: list, temperature: float = 0.0) -> str:
         """Panggilan bebas dengan beberapa bagian (teks + berkas PDF/gambar inline). Dipakai untuk membaca berkas biaya/gambar."""

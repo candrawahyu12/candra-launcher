@@ -29,7 +29,7 @@ def schema(props: dict, required: list[str]) -> dict:
 
 
 TOOLS = {
-    "create_scrape_job": ("Buat job scrape/impor dari sumber berizin (csv_feed atau web_jsonld pada domain allowlist). Segera kembali dengan jobId.",
+    "create_scrape_job": ("Buat job scrape/impor dari CSV feed atau URL website (csv_feed atau web_jsonld). Segera kembali dengan jobId.",
         schema({"sourcePlatform": {"enum": ["csv_feed", "web_jsonld"]}, "inputMode": {"enum": ["list_url", "detail_urls", "csv"]},
                 "urls": {"type": "array", "items": STR, "maxItems": 200}, "csvText": STR, "limit": INT, "collectionName": STR,
                 "rightsDeclaration": {"enum": ["unverified", "supplier_permitted", "own", "licensed"]},

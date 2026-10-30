@@ -5,6 +5,9 @@
 <label>Alamat aplikasi</label><input id="base" placeholder="http://127.0.0.1:8765">
 <label>Token (CANDRA &gt; Settings &gt; Ekstensi Chrome)</label><input id="token" type="password">
 <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="deep" style="width:auto"> Ambil harga &amp; foto tiap varian (klik varian otomatis di halaman Anda)</label>
+<label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="auto" style="width:auto"> Ambil antrean Grabber otomatis (tiap 30 detik, Chrome harus terbuka)</label>
 <button id="save">Simpan & tes koneksi</button> <button id="diag">Unduh diagnostik halaman</button>
+<hr><b>Antrean Grabber</b><div style="color:#666">URL Shopee/Tokopedia dari menu Grabber dibuka di tab ini; Anda login &amp; menyelesaikan verifikasi sendiri.</div>
+<div id="q" style="margin:6px 0;color:#345"></div><button id="qrun">Ambil antrean sekarang</button> <button id="qstop">Hentikan</button>
 <hr><b>Isi Form Seller Center</b><div style="color:#666">Buka halaman "Tambah Produk" di Seller Center (login sendiri), lalu klik:</div><button id="fillOn">Aktifkan Isi Form di situs ini</button> <button id="fillOff">Matikan di situs ini</button>
 <div id="m"></div><script src="popup.js"></script>

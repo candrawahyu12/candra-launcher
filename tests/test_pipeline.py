@@ -140,7 +140,6 @@ class WebAdapterTests(unittest.TestCase):
     def svc_with(self, pages):
         web = FakeWeb(pages)
         svc = make_svc(fetch_override=web)
-        svc.add_source("web_jsonld", "supplier.example.com", "feed resmi supplier, disetujui 2026-10-01")
         return svc, web
 
     def job(self, svc, mode, urls, **kw):
@@ -177,14 +176,12 @@ class WebAdapterTests(unittest.TestCase):
         sleeps = []
         web = FakeWeb({u: [RetryableFetchError("HTTP 429", 5), RetryableFetchError("HTTP 503"), product_page("S1", "A", 10000)]})
         svc = make_svc(fetch_override=web, sleep=sleeps.append)
-        svc.add_source("web_jsonld", "supplier.example.com", "izin tercatat")
         st = self.run_job(svc, u)
         self.assertEqual(st["succeeded"], 1)
         self.assertEqual(len(sleeps), 2)
         self.assertGreaterEqual(sleeps[0], 5)  # menghormati Retry-After
         web2 = FakeWeb({u: [RetryableFetchError("HTTP 503")] * 5})
         svc2 = make_svc(fetch_override=web2)
-        svc2.add_source("web_jsonld", "supplier.example.com", "izin tercatat")
         st2 = self.run_job(svc2, u)
         self.assertEqual(svc2.jobs.items(st2["jobId"])[0]["error_code"], "RETRIES_EXHAUSTED")
         self.assertEqual(len(web2.calls) - 1, 3)  # 3 percobaan (+1 robots)
@@ -208,17 +205,15 @@ class WebAdapterTests(unittest.TestCase):
 
     def test_ssrf_blocked_at_job_creation(self):
         svc = make_svc(resolver=priv)
-        svc.add_source("web_jsonld", "supplier.example.com", "izin tercatat")
         for bad in ("https://169.254.169.254/latest", "https://evil.com/p", "http://supplier.example.com/p", "https://supplier.example.com/p"):
             with self.assertRaises(ValueError, msg=bad):
                 svc.create_scrape_job(source_platform="web_jsonld", input_mode="detail_urls", inputs={"urls": [bad]}, collection_name="x")
 
-    def test_requires_allowlist_with_permission_note(self):
-        svc = make_svc()
-        with self.assertRaises(ValueError):
-            svc.create_scrape_job(source_platform="web_jsonld", input_mode="detail_urls", inputs={"urls": [f"{self.BASE}/p"]}, collection_name="x")
-        with self.assertRaises(ValueError):
-            svc.add_source("web_jsonld", "supplier.example.com", "")
+    def test_no_allowlist_needed_for_public_domain(self):
+        svc = make_svc()  # tanpa daftar domain: domain publik mana pun boleh, alamat privat tetap ditolak
+        j = svc.create_scrape_job(source_platform="web_jsonld", input_mode="detail_urls", inputs={"urls": [f"{self.BASE}/p"]}, collection_name="x")
+        self.assertEqual(j["status"], "queued")
+        self.assertFalse(j["viaBrowser"])
 
     def test_jsonld_parsing_multiple_offers(self):
         html = ld({"@graph": [{"@type": "Product", "name": "Sepatu", "sku": "SP1", "offers": [
