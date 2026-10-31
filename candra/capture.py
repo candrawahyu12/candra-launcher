@@ -174,7 +174,7 @@ def _session_job(db: DB, rights: str) -> dict:
     return job
 
 
-def capture_items(db: DB, items: list, rights: str = "unverified", job_id: Optional[int] = None) -> dict:
+def capture_items(db: DB, items: list, rights: str = "self_responsible", job_id: Optional[int] = None) -> dict:
     if not isinstance(items, list) or not items:
         raise CaptureError("tidak ada item")
     if len(items) > MAX_ITEMS:

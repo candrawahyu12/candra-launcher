@@ -115,3 +115,12 @@ bisa berubah; bila data tidak lengkap, klik ikon ekstensi → "Unduh diagnostik 
 - **AI Optimize**: daftar produk dengan kotak centang tampil lebih dulu (default semua), lalu Buat usulan → centang hasil → Terapkan. Tetap divalidasi: angka/fakta tidak boleh berubah.
 - **Bulk Editor**: deskripsi tampil langsung (tanpa "Memuat…"), bisa diedit, dikembalikan ke asli supplier, atau diusulkan Gemini.
 - **Hapus collection** kini ikut menghapus foto olahan, berkas ekspor, dan produk milik collection itu (produk yang dipakai collection lain / sudah pernah diupload dipertahankan).
+
+## v0.16.0 — Kategori oleh Gemini, berat & pre-order, tarif per kategori, judul upload terlihat
+- **Kategori marketplace**: dipilih oleh Gemini (membaca judul + kategori sumber, hanya dari daftar resmi yang Anda unggah); aplikasi tidak lagi menebak.
+- **Berat & Pre-order**: kolom di tabel collection + dialog **Berat & Pre-order** (isi sekaligus untuk semua produk, atau per produk). Dipakai di payload upload dan ekspor CSV.
+- **Biaya platform**: komisi administrasi dibaca per kategori dari berkas (Gemini memilih baris tarif untuk tiap produk, hanya dari label yang ada di berkas), biaya proses pesanan satu kali (Rp tetap), program lain (XTRA, cashback, dll.) nonaktif; nama kategori seperti "Tiket, Voucher, & Layanan" hanya berlaku bila produknya memang kategori itu. Berkas tarif tersimpan; "Baca dengan Gemini" memakai berkas tersimpan tanpa unggah ulang.
+- **Harga & Kompetitor**: rincian biaya menampilkan semua varian (nama + modal + harga saran + rincian biaya).
+- **Preview upload**: kode galat dijelaskan dalam bahasa Indonesia dengan tombol perbaikan cepat (nyatakan hak, olah gambar, stok tetap). Hasil grab dari Chrome kini bawaan "saya yang bertanggung jawab". Stok tidak terbaca memakai stok tetap.
+- **Judul**: awalan/akhiran dari Collection Settings terlihat di tabel ("judul saat upload") dan di preview; ringkasan pengaturan tersimpan ditampilkan jelas.
+- **Deskripsi**: dialog produk menampilkan deskripsi ASLI supplier terpisah dari hasil bersih; Bulk Editor punya tombol "Ambil ulang halaman produk" untuk produk yang deskripsinya kosong (grab dari halaman daftar tidak membawa deskripsi). Ekstensi 0.3.2: pembaca deskripsi lebih tahan terhadap perbedaan struktur halaman.

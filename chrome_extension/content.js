@@ -37,10 +37,19 @@
     return [...els].map(text).filter(Boolean).join(" > ");
   }
   function sectionText(heading) {
-    const h = [...document.querySelectorAll("h2,h3,div,span")].find(e => e.children.length === 0 && /^deskripsi( produk)?$/i.test(text(e)) && heading);
+    const h = [...document.querySelectorAll("h1,h2,h3,h4,div,span,label")].find(e => e.children.length === 0 && /^deskripsi( produk)?:?$/i.test(text(e)) && heading);
     if (!h) return "";
-    let n = h.parentElement && h.parentElement.nextElementSibling;
-    return n ? n.innerText.trim() : "";
+    // teks deskripsi bisa ada di saudara judul, saudara induknya, atau saudara kakeknya (struktur halaman berbeda-beda)
+    const cands = [h.nextElementSibling, h.parentElement && h.parentElement.nextElementSibling,
+                   h.parentElement && h.parentElement.parentElement && h.parentElement.parentElement.nextElementSibling];
+    for (const n of cands) { const t = n && n.innerText ? n.innerText.trim() : ""; if (t.length >= 15) return t; }
+    // terakhir: seluruh isi wadah judul dikurangi judulnya sendiri
+    let up = h.parentElement;
+    for (let i = 0; i < 3 && up; i++, up = up.parentElement) {
+      const t = (up.innerText || "").replace(/^\s*deskripsi( produk)?\s*/i, "").trim();
+      if (t.length >= 40 && t.length < 8000) return t;
+    }
+    return "";
   }
   // Aturan baca-halaman: bawaan di bawah, ditimpa oleh aturan dari aplikasi (candra/capture_rules.json) bila ada.
   let R = { variant_headings: "^(warna|ukuran|varian|variasi|pilihan|size|color|colour|model|tipe|motif|jenis|paket)\\b",

@@ -290,6 +290,19 @@ MIGRATIONS = [
     """
     ALTER TABLE upload_batches ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
     """,
+    # ---- v10: berat & pre-order yang Anda isi sendiri; kategori tarif per produk (dipilih Gemini dari tabel tarif berkas) ----
+    """
+    ALTER TABLE products ADD COLUMN weight_edited INTEGER;
+    ALTER TABLE products ADD COLUMN preorder_days INTEGER;
+    CREATE TABLE product_fee_category(
+        product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+        marketplace TEXT NOT NULL,
+        label TEXT NOT NULL,
+        origin TEXT NOT NULL DEFAULT 'ai',
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(product_id, marketplace)
+    );
+    """,
 ]
 
 

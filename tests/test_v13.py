@@ -215,8 +215,19 @@ class UploadAutoMapTests(unittest.TestCase):
         svc.create_scrape_job(source_platform="csv_feed", input_mode="csv", inputs={"csv_text": SAMPLE}, collection_name="K", rights_declaration="self_responsible")
         svc.jobs.run_pending()
         col = svc.db.one("SELECT id FROM collections")["id"]
-        imp = svc.import_categories_file("shopee", "k.csv", b"100,Fashion Pria > Atasan > Kaos\n200,Tas Pria > Ransel\n300,Rumah > Dapur > Panci\n")
-        self.assertGreater(imp["autoMapped"], 0)            # setelah impor, produk langsung dipetakan otomatis
+        import os as _os
+        def fake(u, h, b):          # Gemini memilih kandidat pertama untuk tiap produk (kategori ditentukan AI, bukan aplikasi)
+            prompt = b["contents"][0]["parts"][0]["text"]
+            data = json.loads(prompt.split("DATA_JSON: ", 1)[1])
+            return _gem(json.dumps([{"product": d["product"], "id": d["kandidat"][0]["id"]} for d in data]))
+        _os.environ["GEMINI_API_KEY"] = "AQ.dummy_key_for_tests_1234567890"
+        try:
+            svc.providers["gemini"].transport = fake; svc.providers["gemini"].min_interval = 0.0
+            imp = svc.import_categories_file("shopee", "k.csv", b"100,Fashion Pria > Atasan > Kaos\n200,Tas Pria > Ransel\n300,Rumah > Dapur > Panci\n")
+        finally:
+            _os.environ.pop("GEMINI_API_KEY", None)
+        self.assertGreater(imp["autoMapped"], 0)            # setelah impor, produk dipetakan oleh Gemini
+        self.assertEqual(svc.auto_map_categories(col, "shopee", False)["summary"]["auto"], 0)   # tanpa Gemini: tidak ada tebakan aplikasi
         ov = svc.category_mapping_overview()["shopee"]
         self.assertEqual(ov["file"]["name"], "k.csv"); self.assertEqual(ov["file"]["count"], 3)   # berkas tampil di Manage Tools
         self.assertEqual(svc.category_list_info()["shopee"], 3)       # daftar tersimpan; tidak perlu diunggah ulang
@@ -358,3 +369,99 @@ class FeeFileLayoutTests(unittest.TestCase):
             self.assertTrue(r2["preview"]["rows"])
             r2 = svc.fees_from_file("shopee", "w.csv", weird.encode(), name_col=1, pct_col=2)
         self.assertEqual({o["keywords"][0]: o["value"] for o in r2["suggestion"]["overrides"]}["kursi"], 7.0)
+
+
+class V16Tests(unittest.TestCase):
+    def _svc_col(self):
+        svc = make_svc()
+        svc.create_scrape_job(source_platform="csv_feed", input_mode="csv", inputs={"csv_text": SAMPLE}, collection_name="K", rights_declaration="self_responsible")
+        svc.jobs.run_pending()
+        return svc, svc.db.one("SELECT id FROM collections")["id"]
+
+    def test_weight_and_preorder_bulk_and_per_product_reach_payload_and_export(self):
+        svc, col = self._svc_col()
+        pids = [p["id"] for p in svc._products_in(col)]
+        self.assertEqual(svc.set_logistics(col, None, weight_gram=750, preorder_days=5)["updated"], len(pids))   # semua produk sekaligus
+        svc.set_logistics(col, [pids[0]], weight_gram=1200, preorder_days=0)                                       # satu produk; pre-order dimatikan
+        items = {i["id"]: i for i in svc.list_collection_products(col, "", 1, 50)["items"]}
+        self.assertEqual(items[pids[0]]["weightGram"], 1200); self.assertIsNone(items[pids[0]]["preorderDays"])
+        self.assertEqual(items[pids[1]]["weightGram"], 750); self.assertEqual(items[pids[1]]["preorderDays"], 5)
+        from candra.uploader import build_payload
+        cfg = svc.get_collection_settings(col)
+        pv = svc.preview_upload(collection_id=col, target="sandbox", selection={"mode": "all"}, config={})
+        self.assertTrue(pv["items"])
+        from candra import uploader as up
+        b = up.build_payload(svc.db, pids[1], "sandbox", up._validate_config(dict(svc.get_collection_settings(col)["settings"]), "sandbox"))
+        self.assertTrue(all(v["weight_gram"] == 750 for v in b["payload"]["variants"]))
+        self.assertEqual(b["payload"]["preorder"], {"enabled": True, "days": 5})
+        b0 = up.build_payload(svc.db, pids[0], "sandbox", up._validate_config(dict(svc.get_collection_settings(col)["settings"]), "sandbox"))
+        self.assertFalse(b0["payload"]["preorder"]["enabled"])
+        with self.assertRaises(ServiceError):
+            svc.set_logistics(col, None, weight_gram=0)
+        with self.assertRaises(ServiceError):
+            svc.set_logistics(col, None, preorder_days=99)
+
+    def test_title_prefix_suffix_visible_in_collection_list(self):
+        svc, col = self._svc_col()
+        svc.set_collection_settings(col, {"title_prefix": ["NEW"], "title_suffix": ["Murah"]})
+        it = svc.list_collection_products(col, "", 1, 50)["items"][0]
+        self.assertTrue(it["uploadTitle"].startswith("NEW ") and it["uploadTitle"].endswith("Murah"))
+        pv = svc.preview_upload(collection_id=col, target="sandbox", selection={"mode": "all"}, config={})
+        self.assertTrue(pv["items"][0]["title"].startswith("NEW "))
+
+    def test_fee_file_is_kept_and_reread_with_gemini_without_reupload(self):
+        import os as _os
+        svc, col = self._svc_col()
+        svc.fees_from_file("shopee", "tarif.csv", b"Kategori,Komisi\nA Meja,8%\nB Kursi,7%\nC Lemari,6%\n")
+        _os.environ["GEMINI_API_KEY"] = "AQ.dummy_key_for_tests_1234567890"
+        try:
+            g = svc.providers["gemini"]; g.min_interval = 0.0
+            g.transport = lambda u, h, b: _gem(json.dumps({"komponen": [{"name": "Komisi", "kind": "percent", "value": 8, "cap": None, "dynamic": True, "note": ""}], "overrides": [], "tanggal_data": "", "catatan": ""}))
+            r = svc.fees_from_file("shopee", "", None, use_ai=True, use_saved=True)
+        finally:
+            _os.environ.pop("GEMINI_API_KEY", None)
+        self.assertEqual(r["fileName"], "tarif.csv"); self.assertEqual(r["method"], "gemini")
+        with self.assertRaises(ServiceError):
+            make_svc().fees_from_file("shopee", "", None, use_saved=True)       # belum pernah ada berkas
+
+    def test_fee_table_commission_per_category_and_single_process_fee(self):
+        from candra import feetable as F
+        rows = [["Kategori", "Komisi Administrasi (%)", "Biaya Proses Pesanan"], ["Tiket, Voucher, & Layanan", "8.25%", "Rp1.250"], ["Aksesoris Fashion", "9.5%", "Rp1.250"],
+                ["Audio", "8%", "Rp1.250"], ["Elektronik", "7.5%", "Rp1.250"], ["Gaming & Konsol", "6%", "Rp1.250"]]
+        r = F.parse(rows, "Non-Mall")
+        comp = {c["name"]: c for c in r["components"]}
+        self.assertEqual(len(r["components"]), 2)                                  # tidak satu komponen per kategori
+        self.assertEqual(comp["Biaya Proses Pesanan"]["value"], 1250.0); self.assertEqual(comp["Biaya Proses Pesanan"]["kind"], "fixed")
+        ov = {o["keywords"][0]: o["value"] for o in r["overrides"]}
+        self.assertEqual(ov["tiket, voucher, & layanan"], 8.25); self.assertEqual(ov["audio"], 8.0)
+
+    def test_ai_picks_fee_category_per_product_only_from_file_labels(self):
+        import os as _os
+        svc, col = self._svc_col()
+        svc.fees_from_file("shopee", "t.csv", b"Kategori,Komisi\nPakaian,8%\nTas,7%\nCelana,6%\nElektronik,5%\n")
+        r0 = svc.fees_from_file("shopee", "t.csv", b"Kategori,Komisi\nPakaian,8%\nTas,7%\nCelana,6%\nElektronik,5%\n")
+        sg = r0["suggestion"]
+        svc.set_fee_profile("shopee", sg["components"], sg["overrides"], True, "t")
+        pid = svc._products_in(col)[0]["id"]
+        _os.environ["GEMINI_API_KEY"] = "AQ.dummy_key_for_tests_1234567890"
+        try:
+            g = svc.providers["gemini"]; g.min_interval = 0.0
+            g.transport = lambda u, h, b: _gem(json.dumps([{"product": pid, "kategori": "Pakaian"}] + [{"product": x["id"], "kategori": "Karangan"} for x in svc._products_in(col)[1:]]))
+            r = svc.ai_map_fee_categories(col, "shopee")
+        finally:
+            _os.environ.pop("GEMINI_API_KEY", None)
+        self.assertEqual(r["mapped"], 1)                                          # label di luar tabel berkas ditolak
+        self.assertEqual(svc.db.one("SELECT label FROM product_fee_category WHERE product_id=?", (pid,))["label"], "pakaian")
+
+    def test_price_advice_lists_every_variant_with_name_and_price(self):
+        svc, col = self._svc_col()
+        r = svc.price_advice(col, marketplace="shopee", target_margin_pct=10)
+        multi = [i for i in r["items"] if len(i.get("variants") or []) > 1]
+        self.assertTrue(multi)
+        for v in multi[0]["variants"]:
+            self.assertTrue(v["label"]); self.assertGreater(v["price"], v["cost"]); self.assertIn("items", v["breakdown"])
+
+    def test_refetch_details_queues_only_products_without_description(self):
+        svc, col = self._svc_col()
+        r = svc.refetch_details(col)
+        self.assertEqual(r["queued"], 0)                                          # sumber csv: bukan URL Shopee -> tidak ada yang diantre

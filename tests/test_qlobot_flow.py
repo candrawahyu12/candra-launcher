@@ -735,7 +735,7 @@ class CaptureTests(unittest.TestCase):
         r = self.svc.capture_products([self.DETAIL], self.tok)
         self.assertEqual(r["saved"], 1)
         p = self.svc.db.one("SELECT * FROM products")
-        self.assertEqual((p["source_platform"], p["source_product_id"], p["rights_status"]), ("shopee_capture", "123.456", "unverified"))
+        self.assertEqual((p["source_platform"], p["source_product_id"], p["rights_status"]), ("shopee_capture", "123.456", "self_responsible"))
         self.assertEqual(p["sold_count"], 10000)
         self.assertEqual(p["source_url"], "https://shopee.co.id/Kaos-Polos-Pria-i.123.456")  # query/hash dibuang
         self.assertEqual(self.svc.db.one("SELECT COUNT(*) n FROM product_images")["n"], 1)  # hanya https
@@ -747,6 +747,7 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual(st["inputMode"], "capture")
         res = self.svc.save_grab(r["jobId"], "Dari Chrome")
         self.assertEqual(res["products"], 1)
+        self.svc.set_rights(res["collectionId"], "unverified")           # bila Anda sendiri menandai 'belum diverifikasi'
         pv = self.svc.preview_upload(collection_id=res["collectionId"], target="sandbox", selection={"mode": "all"}, config={})
         self.assertIn("RIGHTS_UNVERIFIED", pv["errorsByCode"])           # tidak bisa diupload sebelum hak dinyatakan
 

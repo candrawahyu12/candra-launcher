@@ -316,7 +316,7 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
                     raise ServiceError("berkas tidak terbaca (base64 rusak)")
                 return svc.fees_from_file(b.get("marketplace", ""), str(b.get("filename", "")), raw, b.get("text"),
                                           str(b.get("sellerType") or "Non-Mall (Non-Star / reguler)"), use_ai=bool(b.get("useAi")),
-                                          name_col=b.get("nameCol"), pct_col=b.get("pctCol"))
+                                          name_col=b.get("nameCol"), pct_col=b.get("pctCol"), use_saved=bool(b.get("useSaved")))
             if m := re.fullmatch(r"/api/collections/(\d+)/set-price", path):
                 pr = b.get("price")
                 return svc.set_product_price(int(m[1]), int(b["productId"]), b.get("marketplace", ""), None if pr in (None, "") else pr)
@@ -398,6 +398,13 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
                 return svc.detect_brands(int(m[1]), bool(b.get("useAi")))
             if m := re.fullmatch(r"/api/collections/(\d+)/clean", path):
                 return svc.clean_products(int(m[1]), b["types"], b.get("productIds"), b.get("shopNames"), auto_brands=b.get("autoBrands", True) is not False)
+            if m := re.fullmatch(r"/api/collections/(\d+)/fee-categories", path):
+                return svc.ai_map_fee_categories(int(m[1]), b.get("marketplace", ""), b.get("productIds"), b.get("onlyUnmapped", True) is not False)
+            if m := re.fullmatch(r"/api/collections/(\d+)/refetch-details", path):
+                return svc.refetch_details(int(m[1]), b.get("productIds"))
+            if m := re.fullmatch(r"/api/collections/(\d+)/logistics", path):
+                return svc.set_logistics(int(m[1]), b.get("productIds"), b.get("weightGram"), b.get("preorderDays"),
+                                         bool(b.get("clearWeight")), bool(b.get("clearPreorder")))
             if m := re.fullmatch(r"/api/collections/(\d+)/restore-cleaned", path):
                 return svc.restore_cleaned(int(m[1]), b.get("productIds"))
             if m := re.fullmatch(r"/api/collections/(\d+)/optimize-one", path):

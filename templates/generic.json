@@ -56,6 +56,14 @@
       "field": "weight_gram"
     },
     {
+      "header": "Pre-order",
+      "field": "preorder"
+    },
+    {
+      "header": "Hari Pre-order",
+      "field": "preorder_days"
+    },
+    {
       "header": "Nama Varian",
       "field": "variant_name"
     },

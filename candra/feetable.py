@@ -14,6 +14,8 @@ RP = re.compile(r"rp\.?\s*([\d.,]+)", re.I)
 HDR_WORDS = re.compile(r"(?i)\b(kategori|category|komisi|commission|persen|tarif|rate|biaya|fee)\b")
 FEE_NAME = re.compile(r"(?i)(komisi|administrasi|\badmin\b|layanan|pemrosesan|pemrosesan|proses pesanan|penanganan|transaksi|gratis ongkir|xtra|cashback|"
                       r"hemat kirim|asuransi|pembayaran|payment|commission|service fee|biaya)")
+STRONG_FEE = re.compile(r"(?i)(komisi|administrasi|\badmin\b|commission|proses pesanan|pemrosesan|penanganan|service fee|biaya proses)")
+COUNTED = re.compile(r"(?i)(komisi|administrasi|\badmin\b|commission|proses pesanan|pemrosesan|biaya proses)")  # hanya ini yang ikut dihitung secara bawaan
 OPTIONAL = re.compile(r"(?i)(opsional|optional|jika bergabung|jika mengikuti|jika memilih|hanya jika|contoh|rentang|logistik|pre-?order|kondisional|iklan)")
 NONSTAR = re.compile(r"(?i)(non[\s\-]?(star|mall)|reguler|regular|biasa)")
 STARMALL = re.compile(r"(?i)(star|mall|official)")
@@ -98,6 +100,8 @@ def parse(rows: list[list[str]], seller_type: str = "Non-Mall") -> dict:
     comps: list[dict] = []
     used: set[int] = set()
     notes: list[str] = []
+    fee_cat: dict[str, list] = {}
+    fixed_cols: dict[tuple, int] = {}
     # kolom fraksi persen (Excel menyimpan 8% sebagai 0.08): kolom berjudul komisi/persen yang semua isinya <= 1
     for i, r in enumerate(rows):
         if _is_header(r):
@@ -124,6 +128,14 @@ def parse(rows: list[list[str]], seller_type: str = "Non-Mall") -> dict:
             v = pct_of(c, bare_ok=bool(re.search(r"(?i)(komisi|commission|persen|percent|rate|tarif|%)", hl)))
             if v is not None:
                 cols_pct.append((j, v))
+        # kolom nominal tetap berjudul nama biaya (mis. "Biaya Proses Pesanan" = Rp1.250 di tiap baris) -> satu komponen, bukan per baris
+        for j, c in enumerate(r):
+            hj = hdr[j] if j < len(hdr) else ""
+            if hj and FEE_NAME.search(hj) and not any(j == pj for pj, _ in cols_pct):
+                mm = RP.search(c)
+                val = _num(mm.group(1)) if mm else (_num(c) if re.fullmatch(r"\d{1,3}(?:[.,]\d{3})+|\d{3,7}", c) else None)
+                if val and 100 <= val <= 1e7:
+                    fixed_cols[(clean_name(hj) or hj, val)] = fixed_cols.get((clean_name(hj) or hj, val), 0) + 1
         if not cols_pct:
             continue
         chosen = None
@@ -139,6 +151,13 @@ def parse(rows: list[list[str]], seller_type: str = "Non-Mall") -> dict:
             texts = [c for j, c in enumerate(r) if c and not re.fullmatch(r"[\d.,%\s\-–]+", c) and pct_of(c) is None][:1]
         label = texts[-1] if texts else ""
         full = " ".join(r)
+        # baris berbentuk [kategori | nama biaya | persen]: tarif per kategori untuk biaya itu (bukan satu komponen per baris)
+        fee_cells = [c for c in r if c and FEE_NAME.search(c) and pct_of(c) is None and not re.fullmatch(r"[\d.,%\s\-–]+", c)]
+        cat_cells = [c for c in texts if c not in fee_cells]
+        if fee_cells and cat_cells and STRONG_FEE.search(fee_cells[0]):
+            fee_cat.setdefault(re.sub(r"\s+", " ", fee_cells[0])[:60], []).append((cat_cells[0], chosen, full))
+            used.add(i)
+            continue
         if label and not FEE_NAME.search(label) and 2 <= len(label) <= 80 and len(r) >= 2 and not OPTIONAL.search(label):
             cats.append({"label": label, "value": chosen, "row": i})
             used.add(i)
@@ -172,15 +191,64 @@ def parse(rows: list[list[str]], seller_type: str = "Non-Mall") -> dict:
             v = _num(m.group(1))
         if not v or v > 1e7 or v < 100:
             continue
-        label = next((c for c in r if c and not RP.search(c) and not re.fullmatch(r"[\d.,%\s\-–]+", c)), "") or clean_name(full) or "Biaya"
+        label = (next((c for c in r if c and FEE_NAME.search(c) and not re.fullmatch(r"[\d.,%\s\-–]+", c)), "")
+                 or next((c for c in r if c and not RP.search(c) and not re.fullmatch(r"[\d.,%\s\-–]+", c)), "") or clean_name(full) or "Biaya")
+        label = clean_name(label) or label
         comps.append({"name": re.sub(r"\s+", " ", label)[:60], "kind": "fixed", "value": v, "cap": None, "dynamic": False,
                       "enabled": not OPTIONAL.search(full), "note": ("dari berkas: " + full)[:200]})
+    for (nm, val), cnt in fixed_cols.items():
+        comps.append({"name": nm[:60], "kind": "fixed", "value": val, "cap": None, "dynamic": False,
+                      "enabled": bool(COUNTED.search(nm)), "note": f"dari kolom '{nm}' di berkas ({cnt} baris sama)"})
+    for fee, entries in fee_cat.items():
+        vals = {v for _c, v, _f in entries}
+        if COUNTED.search(fee) and len(entries) >= 2:
+            for cat_, v, _f in entries:
+                cats.append({"label": cat_[:80], "value": v, "row": -1})
+            comps.append({"name": fee, "kind": "percent", "value": max(vals), "cap": None, "dynamic": True, "enabled": True,
+                          "note": f"tarif per kategori dibaca dari {len(entries)} baris berkas"})
+        else:
+            comps.append({"name": fee, "kind": "percent", "value": max(vals), "cap": None, "dynamic": False,
+                          "enabled": bool(COUNTED.search(fee)), "note": ("dari berkas: " + entries[0][2])[:200]})
     return _finalize(comps, cats, notes)
 
 
 def _finalize(comps: list, cats: list, notes: list) -> dict:
     # rapikan
     out_c = []
+    PROGRAM = re.compile(r"(?i)(xtra|cashback|ongkir|asuransi|hemat kirim|pembayaran|payment|transaksi|iklan|voucher xtra)")
+    # persen dengan nama yang BUKAN nama biaya/program (mis. 'Tiket, Voucher, & Layanan', 'Audio') = baris kategori, bukan biaya yang selalu dihitung
+    keep = []
+    for c in comps:
+        if c["kind"] == "percent" and not c.get("dynamic") and not STRONG_FEE.search(c["name"]) and not PROGRAM.search(c["name"]):
+            cats.append({"label": c["name"], "value": c["value"], "row": -1})
+        else:
+            keep.append(c)
+    comps = keep
+    # nominal tetap yang sama di banyak baris (biaya proses pesanan Rp1.250 di tiap kategori) -> SATU komponen, bukan satu per kategori
+    fx: dict[float, list] = {}
+    for c in comps:
+        if c["kind"] == "fixed":
+            fx.setdefault(c["value"], []).append(c)
+    for val, group in fx.items():
+        if len(group) >= 3:
+            named = next((g for g in group if STRONG_FEE.search(g["name"])), None)
+            one = dict(named or group[0])
+            if not named:
+                one["name"] = "Biaya Proses Pesanan"
+            one["note"] = f"Rp{val:,.0f} sama di {len(group)} baris berkas".replace(",", ".")
+            one["enabled"] = True
+            comps = [c for c in comps if c not in group] + [one]
+    if len(cats) >= 3:  # nama "kategori" yang kebetulan memuat kata layanan/transaksi (mis. Tiket, Voucher, & Layanan) = baris kategori
+        keep = []
+        for c in comps:
+            if c["kind"] == "percent" and not STRONG_FEE.search(c["name"]) and not c.get("dynamic"):
+                cats.append({"label": c["name"], "value": c["value"], "row": -1})
+            else:
+                keep.append(c)
+        comps = keep
+    for c in comps:  # hanya komisi administrasi & biaya proses pesanan yang dihitung otomatis; lainnya nonaktif (aktifkan sendiri bila ikut)
+        if not COUNTED.search(c["name"]):
+            c["enabled"] = False
     seen, out_c = set(), []
     for c in comps:
         k = (c["name"].lower(), c["kind"], c["value"])
@@ -201,7 +269,7 @@ def _finalize(comps: list, cats: list, notes: list) -> dict:
         # sedikit baris berlabel kategori: perlakukan sebagai komponen biasa
         for c in cats:
             out_c.append({"name": c["label"][:60], "kind": "percent", "value": c["value"], "cap": None, "dynamic": False,
-                          "enabled": True, "note": "dari berkas"})
+                          "enabled": bool(COUNTED.search(c["label"])), "note": "dari berkas (baris kategori; aktifkan bila produk Anda termasuk kategori ini)"})
     if ovs:
         top = max(o["value"] for o in ovs)
         dyn = next((c for c in out_c if c["kind"] == "percent" and re.search(r"(?i)(komisi|administrasi|admin)", c["name"]) and c["enabled"]), None)

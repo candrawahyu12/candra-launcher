@@ -64,6 +64,8 @@ def flatten_payload(payload: dict, max_images: int = 9) -> list[dict]:
         row = dict(base)
         opts = v.get("options") or {}
         row.update({"sku": v["sku"], "price": v["price"], "stock": v["stock"], "weight_gram": v.get("weight_gram") or "",
+                    "preorder": "Ya" if (payload.get("preorder") or {}).get("enabled") else "Tidak",
+                    "preorder_days": (payload.get("preorder") or {}).get("days") or "",
                     "variant_name": "; ".join(opts.keys()), "variant_value": "; ".join(str(x) for x in opts.values())})
         rows.append(row)
     return rows

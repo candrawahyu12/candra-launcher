@@ -184,13 +184,13 @@ function saveDialog(jobId, after) {
 /* ---------------- tabel produk (Grabber & Collections) ---------------- */
 function productTable(items, o = {}) {
   const sel = o.selectable;
-  return h("div", { style: "overflow:auto" }, h("table", {}, h("thead", {}, h("tr", {}, o.markable && h("th", { title: "Centang produk yang mau dihapus dari collection" }, h("input", { type: "checkbox", title: "Pilih semua di halaman ini untuk dihapus", checked: items.length > 0 && items.every(p => o.marks.has(p.id)), onchange: e => o.onMarkAll(e.target.checked) }), h("div", { class: "small mut" }, "Hapus")), sel && h("th", {}, h("input", { type: "checkbox", title: "Ikut diupload (semua)", onchange: e => o.onToggleAll && o.onToggleAll(e.target.checked) }), h("div", { class: "small mut" }, "Upload")), h("th", {}, "No"), h("th", {}, ""), h("th", {}, "Nama"), h("th", {}, "Varian Produk"), h("th", {}, "Harga"), h("th", {}, "Stock"), h("th", {}, "Sold"), h("th", {}, "Rating"), !o.simple && h("th", {}, "Kategori"), !o.simple && h("th", {}, "Hak"))),
+  return h("div", { style: "overflow:auto" }, h("table", {}, h("thead", {}, h("tr", {}, o.markable && h("th", { title: "Centang produk yang mau dihapus dari collection" }, h("input", { type: "checkbox", title: "Pilih semua di halaman ini untuk dihapus", checked: items.length > 0 && items.every(p => o.marks.has(p.id)), onchange: e => o.onMarkAll(e.target.checked) }), h("div", { class: "small mut" }, "Hapus")), sel && h("th", {}, h("input", { type: "checkbox", title: "Ikut diupload (semua)", onchange: e => o.onToggleAll && o.onToggleAll(e.target.checked) }), h("div", { class: "small mut" }, "Upload")), h("th", {}, "No"), h("th", {}, ""), h("th", {}, "Nama"), h("th", {}, "Varian Produk"), h("th", {}, "Harga"), h("th", {}, "Stock"), !o.simple && h("th", { title: "Berat isian Anda (gram) — ubah lewat tombol Berat & Pre-order" }, "Berat"), !o.simple && h("th", {}, "Pre-order"), h("th", {}, "Sold"), h("th", {}, "Rating"), !o.simple && h("th", {}, "Kategori"), !o.simple && h("th", {}, "Hak"))),
     h("tbody", {}, ...items.map((p, i) => h("tr", { class: o.markable && o.marks.has(p.id) ? "marked" : "" }, o.markable && h("td", {}, h("input", { type: "checkbox", checked: o.marks.has(p.id), onchange: e => o.onMark(p.id, e.target.checked) })), sel && h("td", {}, h("input", { type: "checkbox", checked: !!p.selected, onchange: e => o.onSelect && o.onSelect(p.id, e.target.checked) })),
       h("td", {}, (p.position || i + 1)), h("td", {}, p.thumb ? h("img", { class: "thumb", src: p.thumb, referrerpolicy: "no-referrer", loading: "lazy", onerror: e => e.target.style.visibility = "hidden" }) : null),
-      h("td", { style: "max-width:320px" }, h("a", { href: "#", onclick: e => { e.preventDefault(); productDialog(p.id); } }, p.title), p.edited ? h("span", { class: "badge warn", style: "margin-left:6px" }, "diedit") : null),
+      h("td", { style: "max-width:320px" }, h("a", { href: "#", onclick: e => { e.preventDefault(); productDialog(p.id); } }, p.title), p.edited ? h("span", { class: "badge warn", style: "margin-left:6px" }, "diedit") : null, p.uploadTitle && p.uploadTitle !== p.title ? h("div", { class: "small", style: "color:var(--ok,#7bd88f)", title: "Awalan/akhiran dari Collection Settings ditambahkan saat upload/export" }, "↳ judul saat upload: " + p.uploadTitle) : null),
       h("td", { class: "var" }, ...(p.variantItems || []).slice(0, 3).map(x => h("div", {}, x.label + " · ", h("b", {}, rp(x.price)))), p.variants > 3 ? h("div", {}, (p.variants - 3) + " Varian Lainnya") : null),
       h("td", {}, p.priceMin != null && p.priceMax != null && p.priceMin !== p.priceMax ? rp(p.priceMin) + " – " + rp(p.priceMax) : rp(p.price_original), p.price_before_discount ? h("div", { class: "small mut", style: "text-decoration:line-through" }, rp(p.price_before_discount)) : null),
-      h("td", {}, p.stock_original ?? "-"), h("td", {}, p.sold_count ?? "-"), h("td", {}, p.rating != null ? p.rating + (p.review_count ? " (" + p.review_count + ")" : "") : "-"),
+      h("td", {}, p.stock_original ?? "-"), !o.simple && h("td", {}, p.weightGram ? p.weightGram + " g" : h("span", { class: "mut" }, "-")), !o.simple && h("td", {}, p.preorderDays ? p.preorderDays + " hari" : h("span", { class: "mut" }, "Tidak")), h("td", {}, p.sold_count ?? "-"), h("td", {}, p.rating != null ? p.rating + (p.review_count ? " (" + p.review_count + ")" : "") : "-"),
       !o.simple && h("td", { class: "small" }, p.category || h("span", { class: "mut" }, "-")), !o.simple && h("td", {}, h("span", { class: "badge" }, p.rights_status)))))));
 }
 function productDialog(id) {
@@ -202,7 +202,8 @@ function productDialog(id) {
     const cl = h("input", { placeholder: "Nama toko pesaing", style: "width:160px" }), cp = h("input", { type: "number", placeholder: "Harga", style: "width:110px" });
     const compBox = h("div", { class: "gap" }, h("h3", {}, "Harga kompetitor"), ...comps.map(c => h("div", { class: "row small" }, c.label + ": " + rp(c.price), c.url ? h("a", { href: c.url, target: "_blank", rel: "noreferrer noopener" }, "buka") : null, c.label.startsWith("AI") ? h("button", { class: "sm", onclick: () => guard(async () => { await api("/api/products/" + id + "/competitors/confirm", { label: c.label }); productDialog(id); }) }, "verifikasi") : null, h("button", { class: "sm", onclick: () => guard(async () => { await api("/api/products/" + id + "/competitors/delete", { label: c.label }); productDialog(id); }) }, "hapus"))),
       h("div", { class: "row" }, cl, cp, h("button", { class: "sm", onclick: () => guard(async () => { await api("/api/products/" + id + "/competitors", { label: cl.value, price: +cp.value }); productDialog(id); }) }, "Tambah")));
-    modal("Produk #" + id, h("div", {}, h("div", { class: "small mut" }, "Judul asli: " + p.title_original), h("label", { class: "gap" }, "Judul (edit)", t), h("label", { class: "gap" }, "Deskripsi (edit)", d),
+    modal("Produk #" + id, h("div", {}, h("div", { class: "small mut" }, "Judul asli: " + p.title_original), h("label", { class: "gap" }, "Judul (edit)", t), h("details", { class: "gap", open: true }, h("summary", {}, "Deskripsi ASLI dari supplier (tidak berubah)"), h("div", { class: "card small", style: "white-space:pre-wrap;max-height:200px;overflow:auto" }, p.description_original || "(kosong — deskripsi belum terambil dari sumber; grab dengan opsi 'Buka tiap produk', atau tulis sendiri di bawah)")),
+      h("label", { class: "gap" }, "Deskripsi (edit)", d), h("div", { class: "row" }, h("button", { class: "sm", onclick: () => { d.value = p.description_original || ""; } }, "↩ Pakai deskripsi asli")),
       h("div", { class: "small mut gap" }, "Kategori: " + (p.source_category_path || "-") + " · Sumber: " + (p.source_url || p.source_platform) + " · Hak: " + p.rights_status),
       compBox, h("div", { class: "row gap" }, h("span", { class: "grow" }), h("button", { class: "pri", onclick: () => guard(async () => { await api("/api/products/" + id + "/edit", { title: t.value, description: d.value }); closeModal(); toast("Tersimpan (data asli tetap utuh)"); route(); }) }, "Simpan edit"))), true);
   });
@@ -233,7 +234,7 @@ async function collectionDetail(v, id) {
   const ids = () => lastItems.map(p => p.id);
   let lastItems = [];
   const tb = h("div", { class: "toolbar" }, q, sort,
-    h("button", { onclick: () => imageDialog(id) }, "🖼️ Gambar"), h("button", { onclick: () => bulkDialog(id, draw) }, "✏️ Bulk Editor"), h("button", { onclick: () => aiDialog(id, draw) }, "✨ AI Optimize"), h("button", { onclick: () => stockDialog(id, draw) }, "📦 Stok"), h("button", { onclick: () => priceDialog(id) }, "💰 Harga & Kompetitor"), h("button", { onclick: () => analyzeDialog(id, draw) }, "🛡️ Analisis & Bersihkan"),
+    h("button", { onclick: () => imageDialog(id) }, "🖼️ Gambar"), h("button", { onclick: () => bulkDialog(id, draw) }, "✏️ Bulk Editor"), h("button", { onclick: () => aiDialog(id, draw) }, "✨ AI Optimize"), h("button", { onclick: () => stockDialog(id, draw) }, "📦 Stok"), h("button", { onclick: () => logisticsDialog(id, draw) }, "⚖️ Berat & Pre-order"), h("button", { onclick: () => priceDialog(id) }, "💰 Harga & Kompetitor"), h("button", { onclick: () => analyzeDialog(id, draw) }, "🛡️ Analisis & Bersihkan"),
     h("button", { onclick: () => dupDialog(id, draw) }, "Duplikat"), h("button", { onclick: () => settingsDialog(id) }, "⚙️ Collection Settings"), h("button", { onclick: () => rightsDialog(id, draw) }, "Hak konten"),
     h("span", { class: "grow" }), h("button", { class: "pri", onclick: () => location.hash = "#/uploader/" + id }, "Upload / Export"));
   const delCount = h("b", {}, "0");
@@ -329,7 +330,10 @@ function bulkDialog(id, after) {
   async function drawManual() {
     const prods = await fetchProducts(id, false);
     const maxT = 100;
-    manual.replaceChildren(h("div", { class: "small mut" }, "Edit manual: ketik langsung untuk menghapus/menambah kata. Tersimpan otomatis saat Anda pindah kolom. AI hanya opsional (tombol ✨ per produk memberi usulan yang tetap Anda periksa)."),
+    const emptyN = prods.filter(p => !(p.descriptionOriginal || "").trim()).length;
+    const refetch = emptyN ? h("div", { class: "note gap" }, emptyN + " produk belum punya deskripsi asli (grab dari halaman daftar tidak membawa deskripsi). ",
+      h("button", { class: "sm pri", onclick: () => { if (confirm("Ambil ulang halaman " + emptyN + " produk lewat Chrome Anda untuk melengkapi deskripsi, varian, dan harga varian?\nEdit Anda tidak ditimpa, tetapi foto olahan produk itu harus diproses ulang.")) guard(async () => { const r = await api("/api/collections/" + id + "/refetch-details", {}); toast(r.queued ? r.queued + " produk diantrekan ke Chrome (cek Process Monitor)" : r.note, !r.queued); if (r.status === "waiting_browser") window.postMessage({ candra: "queueRun" }, location.origin); }); } }, "Ambil deskripsi dari Shopee/Tokopedia")) : null;
+    manual.replaceChildren(refetch, h("div", { class: "small mut" }, "Edit manual: ketik langsung untuk menghapus/menambah kata. Tersimpan otomatis saat Anda pindah kolom. AI hanya opsional (tombol ✨ per produk memberi usulan yang tetap Anda periksa)."),
       ...prods.map((p, i) => {
         const st = h("span", { class: "small mut" }), cnt = h("span", { class: "small mut" });
         const tIn = h("input", { value: p.title || "", style: "width:100%", maxlength: 200 });
@@ -531,7 +535,7 @@ function settingsForm(init) {
     if (rule.mode === "tiers") rule.tiers = split(f.tiers.value).map(l => { const m = l.match(/^(\d+)\s*-\s*(\d*)\s*:\s*([\d.]+)$/); if (!m) throw new Error("Format tingkat salah: " + l); return { min: +m[1], max: m[2] ? +m[2] : null, percent: +m[3], fixed: 0 }; });
     const s = { price_rule: rule, title_prefix: split(f.tp.value), title_suffix: split(f.ts.value), desc_prefix: split(f.dp.value), desc_suffix: split(f.ds.value), skip_zero_stock: f.skip.checked, stock_mode: f.smode.value, require_processed_images: f.reqimg.checked };
     if (f.ship.value) s.ship_days = +f.ship.value;
-    if (s.stock_mode === "fixed") s.fixed_stock = +f.fstock.value;
+    s.fixed_stock = +f.fstock.value;
     return s;
   };
   const el = h("div", {}, h("h3", {}, "Markup harga"), h("div", { class: "row" }, h("label", {}, "Jenis", f.mode), h("label", {}, "Persen", f.percent), h("label", {}, "Nominal", f.fixed), h("label", {}, "Tambahan Rp", f.extra)),
@@ -543,7 +547,7 @@ function settingsForm(init) {
     h("div", { class: "row" }, h("label", {}, "Komisi + layanan (%)", f.comm), h("label", {}, "Biaya tetap per pesanan (Rp)", f.fcost)),
     h("h3", { class: "gap" }, "Tambahan judul & deskripsi"), h("div", { class: "small mut" }, "Beberapa opsi (satu per baris) dipakai bergiliran antar produk — deterministik, bukan acak."),
     h("div", { class: "row" }, h("label", { class: "grow" }, "Awalan judul", f.tp), h("label", { class: "grow" }, "Akhiran judul", f.ts)), h("div", { class: "row gap" }, h("label", { class: "grow" }, "Awalan deskripsi", f.dp), h("label", { class: "grow" }, "Akhiran deskripsi", f.ds)),
-    h("h3", { class: "gap" }, "Pengiriman & stok"), h("div", { class: "row" }, h("label", {}, "Dikirim dalam (hari)", f.ship), h("label", {}, "Stok", f.smode), h("label", {}, "Jumlah (stok tetap)", f.fstock), h("label", { class: "chk" }, f.skip, "Lewati produk stok kosong")),
+    h("h3", { class: "gap" }, "Pengiriman & stok"), h("div", { class: "row" }, h("label", {}, "Dikirim dalam (hari)", f.ship), h("label", {}, "Stok", f.smode), h("label", { title: "Dipakai bila Stok = Stok tetap, atau stok produk tidak terbaca dari sumber" }, "Jumlah (stok tetap / cadangan)", f.fstock), h("label", { class: "chk" }, f.skip, "Lewati produk stok kosong")),
     h("label", { class: "chk gap" }, f.reqimg, "Wajib olah gambar dulu sebelum upload"),
     h("div", { class: "small mut" }, "Merek selalu \"Tanpa Merek\" dan COD selalu nonaktif — aturan tetap, tidak bisa diubah."));
   el.get = get; return el;
@@ -600,6 +604,26 @@ function imageDialog(id) {
 }
 
 /* ---------- Stok ---------- */
+function logisticsDialog(id, after) {
+  guard(async () => {
+    const prods = await fetchProducts(id, false);
+    const bw = h("input", { type: "number", min: 1, placeholder: "gram", style: "width:110px" }), bp = h("input", { type: "number", min: 0, max: 30, placeholder: "hari (0=mati)", style: "width:130px" });
+    const rows = prods.map((p, i) => ({ p, w: h("input", { type: "number", min: 1, value: p.weightGram ?? "", placeholder: "gram", style: "width:100px" }), d: h("input", { type: "number", min: 0, max: 30, value: p.preorderDays ?? "", placeholder: "0", style: "width:80px" }) }));
+    const save = (list, extra) => guard(async () => {
+      let n = 0;
+      for (const r of list) { const body = { productIds: [r.p.id] }; if (r.w.value !== "") body.weightGram = +r.w.value; if (r.d.value !== "") body.preorderDays = +r.d.value; else body.clearPreorder = true; await api("/api/collections/" + id + "/logistics", body); n++; }
+      toast(n + " produk disimpan" + (extra || "")); after(); closeModal();
+    });
+    modal("Berat & Pre-order", h("div", {}, h("div", { class: "note" }, "Isi sendiri. Berat dalam gram (dipakai untuk semua varian produk itu). Pre-order 1–30 hari; kosong/0 = tidak pre-order. Isian di sini menang atas berat dari sumber."),
+      h("div", { class: "card gap" }, h("b", {}, "Isi sekaligus untuk SEMUA produk di collection (" + prods.length + ")"), h("div", { class: "row gap" }, h("label", {}, "Berat", bw), h("label", {}, "Pre-order", bp),
+        h("button", { class: "pri", onclick: () => guard(async () => { if (bw.value === "" && bp.value === "") { toast("Isi berat atau pre-order dulu", true); return; }
+          const body = {}; if (bw.value !== "") body.weightGram = +bw.value; if (bp.value !== "") body.preorderDays = +bp.value;
+          const r = await api("/api/collections/" + id + "/logistics", body); toast(r.updated + " produk diperbarui"); after(); closeModal(); }) }, "Terapkan ke semua"))),
+      h("div", { style: "overflow:auto;max-height:360px", class: "gap" }, h("table", {}, h("thead", {}, h("tr", {}, ...["No", "Produk", "Berat (g)", "Pre-order (hari)"].map(x => h("th", {}, x)))),
+        h("tbody", {}, ...rows.map((r, i) => h("tr", {}, h("td", {}, i + 1), h("td", { class: "small" }, (r.p.title || "").slice(0, 80)), h("td", {}, r.w), h("td", {}, r.d)))))),
+      h("div", { class: "row gap" }, h("span", { class: "grow" }), h("button", { class: "pri", onclick: () => save(rows) }, "Simpan per produk"))), true);
+  });
+}
 function stockDialog(id, after) {
   const op = h("select", {}, ...[["set", "Set jadi nilai tetap"], ["add", "Tambah"], ["subtract", "Kurangi"], ["cap", "Batasi maksimum"], ["floor", "Minimal (naikkan yang kurang)"], ["reset", "Kembalikan ke stok sumber"]].map(([k, l]) => h("option", { value: k }, l)));
   const val = h("input", { type: "number", min: 0, value: 10, style: "width:110px" }), out = h("div", { class: "gap" });
@@ -637,10 +661,11 @@ function feeDialog(mk, after) {
       ...sg.overrides.map(o => ({ label: o.keywords.join(" / "), value: o.value + "%", note: "tarif kategori" }))];
     const fromFile = (useAi, cols) => guard(async () => {
       const f = ffile.files[0];
-      if (!f && !ftext.value.trim()) { toast("Pilih berkas tarif atau tempel teksnya dulu", true); return; }
+      const useSaved = !f && !ftext.value.trim() && !!prof.fileInfo;   // berkas yang sudah tersimpan dipakai lagi (tanpa unggah ulang)
+      if (!f && !ftext.value.trim() && !useSaved) { toast("Pilih berkas tarif atau tempel teksnya dulu", true); return; }
       out.replaceChildren(h("div", { class: "mut" }, useAi ? "Gemini membaca berkas tarif…" : "Membaca berkas tarif…"));
       let r;
-      try { r = await api("/api/fees/from-file", { marketplace: mk, filename: f ? f.name : "", dataBase64: f ? await readB64(f) : undefined, text: ftext.value, sellerType: stype.value, useAi, nameCol: cols ? cols.n : undefined, pctCol: cols ? cols.p : undefined }); } catch (e) { out.replaceChildren(); throw e; }
+      try { r = await api("/api/fees/from-file", { marketplace: mk, filename: f ? f.name : "", dataBase64: f ? await readB64(f) : undefined, text: ftext.value, sellerType: stype.value, useAi, useSaved, nameCol: cols ? cols.n : undefined, pctCol: cols ? cols.p : undefined }); } catch (e) { out.replaceChildren(); throw e; }
       if (r.unreadable) {  // tidak ada kolom nama+persen yang dikenali: tampilkan isi berkas, pengguna memilih kolom
         const pv = r.preview, opts = Array.from({ length: pv.width }, (_, i) => "Kolom " + (i + 1));
         const nsel = h("select", {}, ...opts.map((o, i) => h("option", { value: i }, o))), psel = h("select", {}, ...opts.map((o, i) => h("option", { value: i, selected: i === Math.min(1, pv.width - 1) }, o)));
@@ -668,7 +693,7 @@ function feeDialog(mk, after) {
     modal("Biaya Platform — " + prof.label, h("div", {}, h("div", { class: "note" }, "Status: " + prof.status + ". " + prof.source + " Angka ini BUKAN dari dokumen resmi platform — cocokkan dengan Seller Center Anda. Contoh: harga Rp100.000 dengan komisi dinamis 8% + platform 3,5% + penanganan Rp1.250 + lainnya Rp6.000 = biaya Rp18.750."),
       h("div", { class: "gap" }), filePanel, box,
       h("div", { class: "card gap" }, h("b", {}, "📄 Unggah file biaya platform terbaru"), h("div", { class: "small mut" }, "Unduh tabel tarif dari Seller Center (.xlsx .csv .txt .html). Aplikasi membaca LANGSUNG dari berkas (tanpa mengarang, tanpa AI) lalu menyimpannya permanen. Gemini hanya opsional, dan wajib untuk PDF/gambar."),
-        h("div", { class: "row gap" }, ffile, h("label", {}, "Tipe toko", stype), h("button", { class: "pri", onclick: () => fromFile(false) }, "Baca & simpan berkas"), h("button", { onclick: () => fromFile(true) }, "Baca dengan Gemini (opsional)")), ftext),
+        h("div", { class: "row gap" }, ffile, h("label", {}, "Tipe toko", stype), h("button", { class: "pri", onclick: () => fromFile(false) }, prof.fileInfo ? "Baca ulang berkas tersimpan" : "Baca & simpan berkas"), h("button", { onclick: () => fromFile(true) }, prof.fileInfo ? "Baca berkas tersimpan dengan Gemini" : "Baca dengan Gemini (opsional)")), ftext),
       h("div", { class: "row gap" }, h("button", { onclick: () => guard(async () => { const r = await api("/api/fees/research", { marketplace: mk, category: cat.value }); const sg = r.suggestion;
         out.replaceChildren(h("div", { class: "note" }, r.warning + " Sumber: " + (sg.sources.join(", ") || "-") + " · data: " + (sg.dataDate || "?")), h("table", {}, ...sg.components.map(c => h("tr", {}, h("td", {}, c.name), h("td", {}, c.kind === "percent" ? c.value + "%" : rp(c.value)), h("td", {}, c.cap ? "maks " + rp(c.cap) : ""), h("td", { class: "small mut" }, c.note)))),
           h("button", { class: "sm", onclick: () => { comps = sg.components.map(c => ({ ...c })); aiMeta = { source: "Riset AI " + new Date().toISOString().slice(0, 10) + " (data: " + (sg.dataDate || "?") + "); sumber: " + (sg.sources.join(", ") || "-") }; draw(); out.replaceChildren(h("div", { class: "note" }, "Usulan dimuat ke tabel di atas — periksa lalu Simpan. Status akan menjadi AI_RESEARCHED (belum terverifikasi).")); } }, "Muat usulan ke tabel")); }) }, "🔎 Cari tarif dengan AI"), cat),
@@ -686,11 +711,15 @@ function priceDialog(id) {
   const VER = { RUGI: ["bad", "Rugi di harga kini"], TIDAK_BISA_BERSAING: ["bad", "Tidak bisa bersaing"], MARGIN_TIPIS_JIKA_SAMAI: ["warn", "Margin tipis jika disamai"], TERLALU_MAHAL: ["warn", "Terlalu mahal"], KOMPETITIF: ["ok", "Kompetitif"], TANPA_PEMBANDING: ["", "Tanpa pembanding"], REKOMENDASI_SIAP: ["ok", "Siap: pakai harga rekomendasi"], HARGA_BELUM_DIATUR: ["warn", "Harga jual belum diatur"], MODAL_TIDAK_ADA: ["bad", "Modal kosong"], BIAYA_TERLALU_BESAR: ["bad", "Biaya terlalu besar"] };
   const feeRows = b => b ? h("div", { class: "small" }, ...b.items.map(i => h("div", {}, i.name + ": " + rp(i.amount) + (i.capped ? " (kena batas)" : "") + (i.overridden ? " (tarif kategori)" : ""))), h("div", {}, h("b", {}, "Total biaya " + rp(b.total) + " · laba " + rp(b.profit) + " (" + b.marginPct.toFixed(1) + "%)"))) : "-";
   const run = () => guard(async () => {
+    try {  // Gemini membaca tiap produk dan memilih baris tarif komisi dari berkas tarif Anda (hanya yang belum dipilih)
+      const ai = ((await api("/api/ai")).providers || []).find(p => p.name === "gemini");
+      if (ai && ai.ready) { const fc = await api("/api/collections/" + id + "/fee-categories", { marketplace: mk.value }); if (fc.mapped) toast("Gemini memilih tarif komisi untuk " + fc.mapped + " produk"); if (fc.note) toast(fc.note, true); }
+    } catch (e) { toast("Komisi per produk oleh Gemini dilewati: " + e.message, true); }
     const r = await api("/api/collections/" + id + "/price-advice", { marketplace: mk.value, targetMarginPct: +margin.value, extraCost: +extra.value || 0, markupFixed: +markupRp.value || 0, useAiPrices: useAi.checked });
     out.replaceChildren(!r.ruleSet ? h("div", { class: "note" }, "Belum ada harga jual yang terpasang di collection, jadi kolom 'Harga kini' kosong (bukan error). Harga rekomendasi sudah memuat modal + markup Anda + semua biaya platform: klik 'Terapkan harga rekomendasi' agar terpasang, atau ubah satuan dengan ikon ✎.") : null,
       h("div", { class: "note" }, "Profil biaya " + mk.value + ": " + r.feeStatus + (r.feeStatus !== "VERIFIED_BY_USER" ? " — tarif belum Anda verifikasi!" : "") + " · " + Object.entries(r.summary).map(([k, n]) => (VER[k] || [0, k])[1] + ": " + n).join(" · ")),
       h("div", { style: "overflow:auto;max-height:420px" }, h("table", {}, h("thead", {}, h("tr", {}, ...[["Produk"], ["Modal"], ["Harga kini"], ["Rincian biaya di harga saran"], ["Impas", "Impas (break-even) = harga jual terendah agar laba tepat Rp0 setelah semua biaya platform. Di bawah angka ini Anda rugi."], ["Kompetitor min / median"], ["Harga rekomendasi"], ["Status"]].map(x => h("th", { title: x[1] || "" }, x[0])))),
-        h("tbody", {}, ...r.items.map(i => { const v = VER[i.verdict] || ["", i.verdict]; return h("tr", {}, h("td", {}, h("a", { href: "#", onclick: e => { e.preventDefault(); productDialog(i.id); } }, i.title)), h("td", {}, rp(i.cost)), h("td", {}, rp(i.priceNow), i.priceSource ? h("div", { class: "small mut" }, i.priceSource === "rekomendasi" ? "harga rekomendasi/manual" : i.priceSource) : null), h("td", {}, feeRows(i.atFloor)), h("td", {}, rp(i.breakEven)),
+        h("tbody", {}, ...r.items.map(i => { const v = VER[i.verdict] || ["", i.verdict]; return h("tr", {}, h("td", {}, h("a", { href: "#", onclick: e => { e.preventDefault(); productDialog(i.id); } }, i.title)), h("td", {}, rp(i.cost)), h("td", {}, rp(i.priceNow), i.priceSource ? h("div", { class: "small mut" }, i.priceSource === "rekomendasi" ? "harga rekomendasi/manual" : i.priceSource) : null), h("td", {}, feeRows(i.atFloor), (i.variants || []).length ? h("details", { class: "gap", open: true }, h("summary", {}, "Per varian (" + i.variants.length + ")"), ...i.variants.map(v => h("div", { class: "small", style: "margin:4px 0;padding:4px;border-top:1px solid var(--line, #2a3350)" }, h("b", {}, v.label), " · modal " + rp(v.cost) + " → harga saran ", h("b", {}, rp(v.price)), h("div", { class: "mut" }, v.breakdown.items.map(x => x.name + " " + rp(x.amount)).join(" + ") + " = biaya " + rp(v.breakdown.total) + " · laba " + rp(v.breakdown.profit))))) : null), h("td", {}, rp(i.breakEven)),
           h("td", { class: "small" }, i.compCount ? rp(i.compMin) + " / " + rp(i.compMedian) + " (" + i.compCount + ")" : "-", i.aiHidden ? h("div", { class: "mut" }, i.aiHidden + " harga AI belum dipakai") : null), h("td", {}, h("b", {}, i.suggested ? rp(i.suggested) : "-"), " ", h("button", { class: "sm", title: "Edit harga jual manual", onclick: () => guard(async () => {
             const cur = prompt("Harga jual manual untuk produk ini (Rp). Kosongkan untuk kembali ke harga otomatis:", String(i.priceNow || i.suggested || ""));
             if (cur === null) return;
@@ -759,7 +788,15 @@ async function pgUploader(v, arg) {
   const total = cols.find(c => c.id === U.colId).products;
   // langkah 1
   const st1 = h("div", { class: "card step" }, h("h3", {}, h("span", {}, "1"), "Collection Settings"), h("div", { class: "small mut" }, "Markup harga, tambahan judul/deskripsi, pengiriman, stok."),
-    h("div", { class: "small gap" }, Object.keys(settings).length ? "Sudah dikonfigurasi (" + Object.keys(settings).join(", ") + ")" : "Belum diatur — harga = harga sumber."),
+    h("div", { class: "small gap" }, (() => {
+      const pr = settings.price_rule || {}, bits = [];
+      if (pr.mode === "percent" && pr.percent) bits.push("markup " + pr.percent + "%"); else if (pr.mode === "fixed" && pr.fixed) bits.push("markup Rp" + pr.fixed); else if (pr.mode === "tiers") bits.push("markup bertingkat");
+      if (pr.fee_aware) bits.push("biaya platform otomatis"); else if (!bits.length) bits.push("harga = harga sumber (markup 0)");
+      if ((settings.title_prefix || []).length) bits.push("awalan judul: " + settings.title_prefix.join(" | ")); if ((settings.title_suffix || []).length) bits.push("akhiran judul: " + settings.title_suffix.join(" | "));
+      if ((settings.desc_prefix || []).length || (settings.desc_suffix || []).length) bits.push("tambahan deskripsi");
+      if (settings.stock_mode === "fixed") bits.push("stok tetap " + settings.fixed_stock);
+      return "Tersimpan: " + bits.join(" · ") + ". Ubah lewat tombol di bawah, lalu tekan Simpan.";
+    })()),
     h("div", { class: "row gap" }, h("button", { onclick: () => settingsDialog(U.colId) }, "Atur & View Example")));
   // langkah 2
   const mode = h("select", {}, h("option", { value: "all" }, "Semua produk"), h("option", { value: "selected" }, "Yang tercentang"), h("option", { value: "range" }, "Rentang nomor"));
@@ -799,8 +836,7 @@ async function pgUploader(v, arg) {
     h("details", { class: "gap" }, h("summary", {}, "Atur kategori manual per kategori sumber (opsional)"), catBox),
     h("div", { class: "row gap" }, h("button", { class: "sm pri", onclick: () => autoCatDialog(U.colId, mkt.value, drawCats) }, "✨ Isi kategori otomatis semua produk"), h("button", { class: "sm", onclick: suggest }, "Isi per kategori sumber")),
     h("details", { class: "gap" }, h("summary", {}, "Impor daftar kategori marketplace (berkas .xlsx/.csv atau tempel)"), h("div", { class: "row gap" }, catFile, h("button", { class: "sm pri", onclick: () => guard(async () => { const f = catFile.files[0]; if (!f) { toast("Pilih berkas dulu", true); return; } const r = await api("/api/categories/import-file", { marketplace: mkt.value, filename: f.name, dataBase64: await readB64(f) }); toast(r.imported + " kategori diimpor"); }) }, "⬆ Impor berkas")), catCsv, h("button", { class: "sm", onclick: () => guard(async () => { const r = await api("/api/categories/import", { marketplace: mkt.value, csvText: catCsv.value }); toast(r.imported + " kategori diimpor"); }) }, "Impor teks")), h("div", { class: "row gap" }, h("label", {}, "Kategori fallback", h("div", { class: "row" }, fbId, fbLabel))));
-  body.append(h("div", { class: "steps" }, st1, st2, st3), h("div", { class: "row gap" }, h("span", { class: "grow" }),
-    h("button", { class: "pri", onclick: () => guard(async () => {
+  const runPreview = () => guard(async () => {
       const sel = mode.value === "range" ? { mode: "range", from: +from.value, to: +to.value } : { mode: mode.value };
       const config = { marketplace: mkt.value };
       if (U.tab === "direct") Object.assign(config, { delay_min: +dmin.value, delay_max: +dmax.value, pause_after_failures: +pause.value });
@@ -813,17 +849,35 @@ async function pgUploader(v, arg) {
           if (r.applied) toast(r.applied + " produk diberi kategori otomatis" + (r.summary.needsReview ? "; " + r.summary.needsReview + " perlu dipilih di langkah Atur manual" : ""));
         } catch (e) { toast("Kategori otomatis dilewati: " + e.message, true); }
       }
+      try {
+        const ai2 = ((await api("/api/ai")).providers || []).find(p => p.name === "gemini");
+        if (ai2 && ai2.ready && target.value !== "sandbox") await api("/api/collections/" + U.colId + "/fee-categories", { marketplace: mkt.value });
+      } catch (e) { toast("Komisi per produk oleh Gemini dilewati: " + e.message, true); }
       const pv = await api("/api/batches", { collectionId: U.colId, target: target.value, selection: sel, config });
-      previewDialog(pv, U.tab === "export");
-    }) }, U.tab === "export" ? "PREVIEW EXPORT" : "PREVIEW UPLOAD")));
+      previewDialog(pv, U.tab === "export", runPreview, U.colId, mkt.value);
+      });
+  body.append(h("div", { class: "steps" }, st1, st2, st3), h("div", { class: "row gap" }, h("span", { class: "grow" }),
+    h("button", { class: "pri", onclick: runPreview }, U.tab === "export" ? "PREVIEW EXPORT" : "PREVIEW UPLOAD")));
   drawCats(); drawMem();
 }
-function previewDialog(pv, isExport) {
+const ERRT = { IMAGES_NOT_PROCESSED: "Foto belum diolah", IMAGE_RIGHTS_UNVERIFIED: "Hak foto belum dinyatakan", RIGHTS_UNVERIFIED: "Hak konten belum dinyatakan", STOCK_UNKNOWN: "Stok tidak terbaca", CATEGORY_UNMAPPED: "Kategori belum terisi",
+  NO_IMAGE: "Tanpa foto", IMAGE_TEXT_REVIEW: "Foto bertulisan perlu ditinjau", SUPPLIER_DATA_IN_TEXT: "Masih ada nomor/link/nama toko di teks", MISSING_TITLE: "Judul kosong", DESC_TOO_LONG: "Deskripsi terlalu panjang", ZERO_STOCK_SKIPPED: "Stok kosong (dilewati)", FEE_PROFILE_MISSING: "Profil biaya belum ada" };
+const errT = c => ERRT[String(c).split(":")[0]] || c;
+function previewDialog(pv, isExport, redo, colId, mk) {
   const key = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2)).replace(/-/g, "");
   modal("Preview — tinjau sebelum " + (isExport ? "export" : "upload"), h("div", {}, h("div", { class: "note" }, pv.total + " produk · " + pv.valid + " valid · " + pv.invalid + " tidak valid" + (pv.belowCost ? " · " + pv.belowCost + " di bawah modal!" : "") + ". Belum ada yang dikirim."),
-    Object.keys(pv.errorsByCode || {}).length ? h("div", { class: "gap" }, ...Object.entries(pv.errorsByCode).map(([k, n]) => h("span", { class: "badge bad", style: "margin-right:6px" }, k + " ×" + n))) : null,
+    (() => {  // tombol perbaikan sesuai kode galat
+      const codes = Object.keys(pv.errorsByCode || {}), btns = [];
+      const again = msg => { toast(msg); closeModal(); if (redo) redo(); };
+      if (colId && (codes.includes("RIGHTS_UNVERIFIED") || codes.includes("IMAGE_RIGHTS_UNVERIFIED"))) btns.push(h("button", { onclick: () => guard(async () => { await api("/api/collections/" + colId + "/rights", { status: "self_responsible" }); again("Hak konten dicatat: sumber publik, tanggung jawab Anda. Preview diulang."); }) }, "Nyatakan sumber publik (saya bertanggung jawab)"));
+      if (colId && codes.includes("IMAGES_NOT_PROCESSED")) btns.push(h("button", { onclick: () => { closeModal(); imageDialog(colId); } }, "Olah gambar dulu"));
+      if (colId && codes.includes("STOCK_UNKNOWN")) btns.push(h("button", { onclick: () => guard(async () => { const cur = (await api("/api/collections/" + colId + "/settings")).settings || {}; await api("/api/collections/" + colId + "/settings", { ...cur, fixed_stock: cur.fixed_stock ?? 100 }); again("Stok cadangan 100 dipakai bila stok sumber tidak terbaca. Preview diulang."); }) }, "Pakai stok cadangan 100"));
+      if (codes.includes("CATEGORY_UNMAPPED")) btns.push(h("span", { class: "small mut" }, "Kategori belum terisi: klik ✨ Isi kategori otomatis (Gemini) di langkah Kategori."));
+      return btns.length ? h("div", { class: "row gap note" }, h("b", {}, "Perbaiki cepat:"), ...btns) : null;
+    })(),
+    Object.keys(pv.errorsByCode || {}).length ? h("div", { class: "gap" }, ...Object.entries(pv.errorsByCode).map(([k, n]) => h("span", { class: "badge bad", style: "margin-right:6px", title: k }, errT(k) + " ×" + n))) : null,
     h("div", { style: "overflow:auto;max-height:340px", class: "gap" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Produk"), h("th", {}, "Modal → Harga jual"), h("th", {}, "Status"))),
-      h("tbody", {}, ...pv.items.map(i => h("tr", {}, h("td", {}, i.title), h("td", { class: "small" }, i.prices.slice(0, 2).map(p => rp(p.cost) + " → " + rp(p.price)).join(" | ")), h("td", {}, i.errors.length ? h("span", { class: "badge bad" }, i.errors.join(", ")) : h("span", { class: "badge ok" }, "siap"))))))),
+      h("tbody", {}, ...pv.items.map(i => h("tr", {}, h("td", {}, i.title), h("td", { class: "small" }, i.prices.slice(0, 2).map(p => rp(p.cost) + " → " + rp(p.price)).join(" | ")), h("td", {}, i.errors.length ? h("span", { class: "badge bad" }, i.errors.map(errT).join(", ")) : h("span", { class: "badge ok" }, "siap"))))))),
     h("div", { class: "row gap" }, h("span", { class: "grow" }), h("button", { onclick: closeModal }, "Batal"),
       h("button", { class: "pri", disabled: !pv.valid, onclick: () => guard(async () => {
         const r = await api("/api/batches/" + pv.batchId + "/confirm", { confirm: true, idempotencyKey: key, previewHash: pv.previewHash });

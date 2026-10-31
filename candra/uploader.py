@@ -323,7 +323,7 @@ def build_payload(db: DB, product_id: int, target: str, cfg: dict, index: int = 
                 p["stock_original"] if p["stock_original"] is not None else cfg["default_stock"])
         if cfg.get("stock_mode") == "fixed":
             stock = cfg["fixed_stock"]
-        weight = v["weight_gram"] or extra_weight or cfg["default_weight_gram"]
+        weight = p.get("weight_edited") or v["weight_gram"] or extra_weight or cfg["default_weight_gram"]   # berat isian Anda menang
         try:
             ov = db.one("SELECT price FROM price_overrides WHERE product_id=? AND variant_id=? ORDER BY updated_at DESC LIMIT 1",
                         (product_id, v.get("id") or 0))
@@ -331,7 +331,8 @@ def build_payload(db: DB, product_id: int, target: str, cfg: dict, index: int = 
                 price = int(ov["price"])  # harga manual / rekomendasi yang Anda terapkan menang atas aturan harga
                 sim = simulate(v["price_original"], price, rule.commission_pct, rule.fixed_cost)
             elif fee_prof:
-                cat_text = " ".join(x for x in ((category or {}).get("label", ""), p["source_category_path"] or "", title) if x)
+                fc = db.one("SELECT label FROM product_fee_category WHERE product_id=? AND marketplace=?", (product_id, mkt))
+                cat_text = fc["label"] if fc else " ".join(x for x in ((category or {}).get("label", ""), p["source_category_path"] or "", title) if x)
                 r0 = PriceRule.from_dict({**rule.__dict__, "round_step": 0, "fee_aware": False})  # markup Anda = laba bersih yang diinginkan
                 markup = compute_price(v["price_original"], r0) - int(round(float(v["price_original"])))
                 price = feemod.solve_price(v["price_original"], fee_prof["components"], fee_prof.get("overrides"), cat_text, 0.0, 0,
@@ -346,6 +347,9 @@ def build_payload(db: DB, product_id: int, target: str, cfg: dict, index: int = 
         except (PricingError, TypeError, feemod.FeeError) as e:
             price = None
             errors.append(f"PRICE_ERROR:{e}")
+        if stock is None and cfg.get("fixed_stock") is not None:
+            stock = cfg["fixed_stock"]                 # stok tidak terbaca dari sumber -> pakai stok tetap yang Anda atur
+            warnings.append("STOCK_FALLBACK_FIXED")
         if stock is None:
             errors.append("STOCK_UNKNOWN")
         elif stock < 0:
@@ -360,7 +364,8 @@ def build_payload(db: DB, product_id: int, target: str, cfg: dict, index: int = 
     payload = {"sku_parent": parent_sku, "title": title, "description": desc, "brand": NO_BRAND, "cod_enabled": False, "category": category, "attributes": attrs,
                "images": [i["source_url"] for i in images],
                "processed_images": [assets[i["id"]]["local_path"] for i in images if i["id"] in assets and assets[i["id"]]["local_path"]], "variants": out_variants, "source_url": p["source_url"],
-               "product_id": product_id, "ship_days": cfg.get("ship_days")}
+               "product_id": product_id, "ship_days": cfg.get("ship_days"),
+               "preorder": {"enabled": bool(p.get("preorder_days")), "days": p.get("preorder_days") or 0}}
     return {"payload": payload, "errors": sorted(set(errors)), "warnings": sorted(set(warnings)), "prices": prices}
 
 
