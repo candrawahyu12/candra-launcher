@@ -220,7 +220,8 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
                 return svc.list_store_connections()
             if m := re.fullmatch(r"/api/collections/(\d+)/products", path):
                 return svc.list_collection_products(int(m[1]), q.get("q", ""), int(q.get("page", 1)), int(q.get("pageSize", 50)),
-                                                    q.get("selectedOnly") == "1", q.get("missingCategory") == "1", q.get("rights"))
+                                                    q.get("selectedOnly") == "1", q.get("missingCategory") == "1", q.get("rights"),
+                                                    with_text=q.get("withText") == "1")
             if m := re.fullmatch(r"/api/collections/(\d+)/categories", path):
                 return svc.category_status(int(m[1]), q.get("target", "export_csv"))
             if m := re.fullmatch(r"/api/products/(\d+)", path):
@@ -314,7 +315,8 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
                 except Exception:  # noqa: BLE001
                     raise ServiceError("berkas tidak terbaca (base64 rusak)")
                 return svc.fees_from_file(b.get("marketplace", ""), str(b.get("filename", "")), raw, b.get("text"),
-                                          str(b.get("sellerType") or "Non-Mall (Non-Star / reguler)"), use_ai=bool(b.get("useAi")))
+                                          str(b.get("sellerType") or "Non-Mall (Non-Star / reguler)"), use_ai=bool(b.get("useAi")),
+                                          name_col=b.get("nameCol"), pct_col=b.get("pctCol"))
             if m := re.fullmatch(r"/api/collections/(\d+)/set-price", path):
                 pr = b.get("price")
                 return svc.set_product_price(int(m[1]), int(b["productId"]), b.get("marketplace", ""), None if pr in (None, "") else pr)
@@ -396,6 +398,8 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
                 return svc.detect_brands(int(m[1]), bool(b.get("useAi")))
             if m := re.fullmatch(r"/api/collections/(\d+)/clean", path):
                 return svc.clean_products(int(m[1]), b["types"], b.get("productIds"), b.get("shopNames"), auto_brands=b.get("autoBrands", True) is not False)
+            if m := re.fullmatch(r"/api/collections/(\d+)/restore-cleaned", path):
+                return svc.restore_cleaned(int(m[1]), b.get("productIds"))
             if m := re.fullmatch(r"/api/collections/(\d+)/optimize-one", path):
                 return svc.optimize_one(int(m[1]), int(b["productId"]), b.get("shopNames") or [], int(b.get("maxTitle", 100)))
             if m := re.fullmatch(r"/api/collections/(\d+)/optimize", path):

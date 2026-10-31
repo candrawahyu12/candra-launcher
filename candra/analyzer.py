@@ -119,6 +119,30 @@ def spec_tokens(text: str) -> set[str]:
     return {re.sub(r"\s+", "", m.group(0).lower()).replace(",", ".") for m in SPEC_TOKEN.finditer(text or "")}
 
 
+_CLAUSE_SPLIT = re.compile(r"(\s*[,;]\s*|\s+[\-–—]\s+|\s*\|\s*)")
+
+
+def _drop_clauses(body: str, rx, kind: str, removed: list) -> str:
+    """Buang HANYA anak kalimat yang memuat sapaan/ajakan toko; anak kalimat lain (identitas produk) tetap. Anak kalimat berisi spesifikasi dipertahankan
+    (hanya frasanya yang dibuang)."""
+    parts = _CLAUSE_SPLIT.split(body)
+    kept: list[str] = []
+    for i in range(0, len(parts), 2):
+        clause = parts[i]
+        sep = parts[i + 1] if i + 1 < len(parts) else ""
+        if rx.search(clause):
+            if _is_protected(clause):
+                for m in rx.finditer(clause):
+                    removed.append({"type": kind, "text": m.group(0)})
+                clause = rx.sub("", clause)
+            else:
+                removed.append({"type": kind, "text": clause.strip()})
+                continue
+        kept.append(clause + sep)
+    out = "".join(kept)
+    return out.strip(" \t,;-–—|") if out.strip() else ""
+
+
 def clean_text(text: str, types: Iterable[str], shop_names: Iterable[str] = (), is_title: bool = False) -> tuple[str, list[dict]]:
     """Bersihkan hanya jenis temuan yang dipilih. Return (teks_bersih, daftar_yang_dihapus) untuk jejak audit."""
     types = set(types) & set(CLEANABLE)
@@ -140,21 +164,17 @@ def clean_text(text: str, types: Iterable[str], shop_names: Iterable[str] = (), 
         original_body = body
         key = normalize_title(body)
         protected = _is_protected(body)
-        # kalimat promo: buang seluruh kalimat kecuali mengandung spesifikasi (maka hanya frasa promonya)
+        # sapaan/ajakan toko: buang anak kalimatnya saja (bukan seluruh kalimat), supaya kata identitas produk di kalimat yang sama tetap ada.
+        # Di JUDUL tidak ada pembuangan kalimat sama sekali: hanya frasa ajakan yang dicabut.
         if "promo" in types and PROMO.search(body):
-            if not protected:
-                removed.append({"type": "promo", "text": original_body.strip()})
-                continue
-            for m in PROMO.finditer(body):
-                removed.append({"type": "promo", "text": m.group(0)})
-            body = PROMO.sub("", body)
-        if "welcome" in types and WELCOME.search(body):
-            if not protected:
-                removed.append({"type": "welcome", "text": original_body.strip()})
-                continue
-            for m in WELCOME.finditer(body):
-                removed.append({"type": "welcome", "text": m.group(0)})
-            body = WELCOME.sub("", body)
+            if is_title:
+                for m in PROMO.finditer(body):
+                    removed.append({"type": "promo", "text": m.group(0)})
+                body = PROMO.sub("", body)
+            else:
+                body = _drop_clauses(body, PROMO, "promo", removed)
+        if "welcome" in types and not is_title and WELCOME.search(body):
+            body = _drop_clauses(body, WELCOME, "welcome", removed)
         for kind, rx in span_rules:
             for m in rx.finditer(body):
                 removed.append({"type": kind, "text": m.group(0)})
@@ -163,17 +183,24 @@ def clean_text(text: str, types: Iterable[str], shop_names: Iterable[str] = (), 
             body = ORPHAN_LABEL.sub("", body)  # label tanpa isi ("WA:") sisa dari pembersihan lain
             if any(r["type"] in ("phone", "url", "handle") for r in removed):
                 body = re.sub(r"(?i)\b(?:wa|whatsapp|telp|tlp|hp|call)\b[\s.,;:\-]*$", "", body)
-        if "repeated_sentence" in types and len(key.split()) >= 4:
+        if "repeated_sentence" in types and not is_title and len(key.split()) >= 4:
             if key in seen_sentences:
                 removed.append({"type": "repeated_sentence", "text": original_body.strip()})
                 continue
             seen_sentences.add(key)
+        if not body.strip(" \t.,;:!?-"):
+            if term.startswith("\n"):
+                out_parts.append(term)
+            continue
         out_parts.append(body + term)
     cleaned = "".join(out_parts)
     cleaned = re.sub(r"[ \t]+", " ", cleaned)
     cleaned = re.sub(r" *\n *", "\n", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     cleaned = re.sub(r"^[\s.!?,;:\-]+", "", cleaned)
+    if is_title:
+        cleaned = re.sub(r"^[\s/|\\\-–—,;:]+|[\s/|\\\-–—,;:]+$", "", cleaned)
+        cleaned = re.sub(r"\s*([/|])\s*(?:[/|]\s*)+", r" \1 ", cleaned)
     return cleaned.strip(), removed
 
 
@@ -193,7 +220,7 @@ def supplier_data_found(text: str, shop_names=()) -> list[str]:
     return sorted(k for k in res["counts"] if k in SUPPLIER_KINDS or k == "shop_name")
 
 
-_GENERIC = set("""alat alat2 paket set kepala pompa sprayer semprotan semprot botol spray air tas baju kaos kemeja celana jaket sepatu sandal topi jam
+GENERIC_WORDS = _GENERIC = set("""alat alat2 paket set kepala pompa sprayer semprotan semprot botol spray air tas baju kaos kemeja celana jaket sepatu sandal topi jam
 kabel charger casing case cover tempat rak lampu led mini portable manual otomatis elektrik listrik baterai kipas mesin pisau gunting panci wajan
 piring gelas mangkuk sendok garpu box kotak dompet ikat pinggang kacamata masker sarung tangan kaus kaki handuk selimut bantal sprei seprai gorden
 karpet keset mainan boneka buku pulpen pensil penghapus tali selang kran keran stiker sticker pelindung pembersih penghilang pewangi parfum sabun
@@ -205,7 +232,10 @@ dengan isi pcs pack liter ltr ml gram kg cm mm penyemprot penyemprotan semprot s
 remover repellent pembersih pengkilap penghitam pelumas pewangi stik stick kepala nozzle tekanan tinggi panjang pendek model type tipe jenis bahan
 plastik besi stainless kayu karet silikon kulit katun polos motif anak dewasa pria wanita cowok cewek unisex bayi ibu rumah tangga dapur kamar mandi
 gantungan hanger rak organizer lipat gulung set paket kit bundle isi multi serbaguna praktis simple elegan kekinian viral trending favorit pilihan
-ready stock siap kirim gratis ongkir cod murah diskon sale promo original asli import lokal garansi""".split())
+ready stock siap kirim gratis ongkir cod murah diskon sale promo original asli import lokal garansi
+meja nakas bedside table samping tempat tidur kamar laci lemari kabinet cabinet sudut natural multifungsi minimalis aesthetic estetik kecil
+kasur sofa kursi rak susun gantung dinding lantai kayu mdf jati rotan bambu besi plastik putih hitam coklat krem cream aesthetic nordic
+modern klasik vintage retro scandinavian skandinavia industrial kokoh kuat awet tahan lama berkualitas""".split())
 
 
 def brand_candidates(titles: Iterable[str], limit: int = 12) -> list[dict]:

@@ -107,3 +107,11 @@ bisa berubah; bila data tidak lengkap, klik ikon ekstensi → "Unduh diagnostik 
 - **Harga & Kompetitor**: status "Siap: pakai harga rekomendasi" (bukan "belum diatur"); kolom *Impas* dijelaskan (harga jual terendah agar laba Rp0).
 - **Manage Tools**: berkas kategori & tarif yang pernah diunggah tampil; setelah impor, produk langsung dipetakan otomatis; pembaca kategori memilih hasil terbanyak dan menampilkan pratinjau bila hanya sedikit terbaca.
 - **Process Monitor**: riwayat yang selesai dibersihkan saat aplikasi dibuka lagi; proses yang belum selesai tetap ada dan berhenti sebagai PAUSED/interrupted (bisa dilanjutkan). Migrasi DB v9.
+
+## v0.15.0 — Pembaca tarif toleran, judul tidak lagi terpotong, hapus collection bersih
+- **Biaya Platform**: berkas tarif (.csv/.xlsx/.txt/.html) dibaca LANGSUNG tanpa AI dengan beberapa pola tabel (kolom Non-Star/Star, persen 8,5% / 8,5 / 0.085, baris judul di atas, nama biaya + Rp tetap). Bila tidak ada kolom yang dikenali, isi berkas ditampilkan dan Anda memilih kolom NAMA + PERSEN lalu baca ulang. Gemini tetap opsional; galat Gemini (429/jaringan) tidak lagi menghalangi pembacaan.
+- **Grabber**: URL pencarian/toko/kategori Shopee-Tokopedia yang ditempel di tab Detail URL otomatis dijalankan sebagai List URL.
+- **Analisis & Bersihkan**: kata judul tidak lagi dihapus. Merek hanya dihapus bila dikonfirmasi Gemini (kata harus ada di judul, kata umum seperti jenis barang/warna ditolak) atau Anda ketik sendiri; identitas toko dihapus per anak kalimat (bukan seluruh kalimat), dan judul tidak pernah kehilangan kalimat. Tombol **Pulihkan teks asli** mengembalikan judul/deskripsi yang sudah terlanjur terpotong.
+- **AI Optimize**: daftar produk dengan kotak centang tampil lebih dulu (default semua), lalu Buat usulan → centang hasil → Terapkan. Tetap divalidasi: angka/fakta tidak boleh berubah.
+- **Bulk Editor**: deskripsi tampil langsung (tanpa "Memuat…"), bisa diedit, dikembalikan ke asli supplier, atau diusulkan Gemini.
+- **Hapus collection** kini ikut menghapus foto olahan, berkas ekspor, dan produk milik collection itu (produk yang dipakai collection lain / sudah pernah diupload dipertahankan).

@@ -976,8 +976,9 @@ class AiCompareAndFeeFileTests(unittest.TestCase):
         self.assertTrue(r["suggestion"]["numbersVerified"])
         self.assertEqual(self.svc.get_fee_profile("shopee")["customized"], False)     # belum menyimpan apa pun
         os.environ.pop("GEMINI_API_KEY")
-        with self.assertRaises(ServiceError):
-            self.svc.fees_from_file("shopee", "x.txt", b"8%")
+        r2 = self.svc.fees_from_file("shopee", "x.txt", b"8%")            # tak ada nama biaya: tidak mengarang, tampilkan isi berkas
+        self.assertTrue(r2["unreadable"])
+        self.assertTrue(r2["preview"]["rows"])
 
     def test_fee_file_pdf_goes_inline_and_xls_rejected(self):
         seen = {}

@@ -130,6 +130,7 @@ class JobManager:
             raise JobError(f"limit harus 1..{MAX_PRODUCTS_PER_JOB}")
         filters = self._validate_filters(filters or {})
         inputs = dict(inputs)
+        auto_switched = False
         if source_platform in WEB_PLATFORMS:
             if input_mode == "csv":
                 raise JobError("mode csv hanya untuk platform csv_feed")
@@ -144,6 +145,14 @@ class JobManager:
             if len(kinds) > 1:
                 raise JobError("URL Shopee/Tokopedia (diambil lewat Chrome Anda) harus dipisah dari URL website lain; jalankan dua kali")
             kwargs = {"resolver": self.resolver} if self.resolver else {}
+            if kinds == {"browser"} and input_mode == "detail_urls":
+                # URL pencarian/toko/kategori Shopee-Tokopedia di tab Detail URL: jalankan otomatis sebagai List URL (bukan ditolak)
+                flags = [self.is_product_url(u) for u in urls]
+                if not all(flags):
+                    if any(flags):
+                        raise JobError("Campuran URL produk dan URL daftar/pencarian: jalankan terpisah (URL produk di tab Detail URL, URL pencarian/toko di tab List URL)")
+                    input_mode = "list_url"
+                    auto_switched = True
             for u in urls:
                 try:
                     validate_url(u, None, **kwargs) if kinds == {"web"} else self._check_browser_url(u, input_mode)
@@ -194,7 +203,16 @@ class JobManager:
         n_src = len(inputs.get("urls", [])) if (source_platform in WEB_PLATFORMS or is_browser) else 1
         self.db.event("scrape", job_id, "info", "JOB_CREATED", f"{source_platform}/{input_mode}: {n_src} sumber")
         return {"jobId": job_id, "status": "waiting_browser" if is_browser else "queued", "collectionId": col_id,
-                "viaBrowser": is_browser}
+                "viaBrowser": is_browser, "autoListMode": auto_switched}
+
+    @staticmethod
+    def is_product_url(url: str) -> bool:
+        from .capture import CaptureError, identify
+        try:
+            identify(url)
+            return True
+        except CaptureError:
+            return False
 
     @staticmethod
     def _check_browser_url(url: str, input_mode: str) -> None:

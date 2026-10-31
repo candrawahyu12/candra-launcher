@@ -139,7 +139,7 @@ def parse(rows: list[list[str]], seller_type: str = "Non-Mall") -> dict:
             texts = [c for j, c in enumerate(r) if c and not re.fullmatch(r"[\d.,%\s\-–]+", c) and pct_of(c) is None][:1]
         label = texts[-1] if texts else ""
         full = " ".join(r)
-        if label and not FEE_NAME.search(label) and 3 <= len(label) <= 80 and len(r) >= 2 and not OPTIONAL.search(label):
+        if label and not FEE_NAME.search(label) and 2 <= len(label) <= 80 and len(r) >= 2 and not OPTIONAL.search(label):
             cats.append({"label": label, "value": chosen, "row": i})
             used.add(i)
             continue
@@ -163,14 +163,24 @@ def parse(rows: list[list[str]], seller_type: str = "Non-Mall") -> dict:
             continue
         m = RP.search(full)
         if not m:
-            continue
-        v = _num(m.group(1))
+            # angka polos >= 100 di baris bernama biaya (kolom nilai tanpa 'Rp') = nominal tetap
+            bare = next((c for c in r[1:] if re.fullmatch(r"\d{1,3}(?:[.,]\d{3})+|\d{3,7}", c)), None)
+            if not bare:
+                continue
+            v = _num(bare)
+        else:
+            v = _num(m.group(1))
         if not v or v > 1e7 or v < 100:
             continue
         label = next((c for c in r if c and not RP.search(c) and not re.fullmatch(r"[\d.,%\s\-–]+", c)), "") or clean_name(full) or "Biaya"
         comps.append({"name": re.sub(r"\s+", " ", label)[:60], "kind": "fixed", "value": v, "cap": None, "dynamic": False,
                       "enabled": not OPTIONAL.search(full), "note": ("dari berkas: " + full)[:200]})
+    return _finalize(comps, cats, notes)
+
+
+def _finalize(comps: list, cats: list, notes: list) -> dict:
     # rapikan
+    out_c = []
     seen, out_c = set(), []
     for c in comps:
         k = (c["name"].lower(), c["kind"], c["value"])
@@ -205,6 +215,108 @@ def parse(rows: list[list[str]], seller_type: str = "Non-Mall") -> dict:
     if not out_c and not ovs:
         notes.append("tidak ada baris tarif yang dikenali")
     return {"components": out_c, "overrides": ovs, "notes": " ".join(notes), "method": "lokal"}
+
+
+RATE_HDR = re.compile(r"(?i)(komisi|commission|persen|percent|rate|tarif|%|fee|biaya)")
+
+
+def _frac_col(vals: list[str]) -> bool:
+    nums = [float(v) for v in vals if re.fullmatch(r"\d+(?:\.\d+)?", v)]
+    return bool(nums) and max(nums) <= 1.0 and any(0 < n < 1 for n in nums)
+
+
+def _cell_pct(c: str, frac: bool, hint: bool) -> Optional[float]:
+    c = (c or "").strip()
+    if frac and re.fullmatch(r"\d+(?:\.\d+)?", c) and 0 < float(c) <= 1.0:
+        return round(float(c) * 100, 4)
+    return pct_of(c, bare_ok=hint)
+
+
+def table_preview(rows: list[list[str]], n: int = 25) -> dict:
+    """Pratinjau tabel apa adanya (untuk memilih kolom secara manual bila pembacaan otomatis tidak menemukan apa-apa)."""
+    rows = [[str(c).strip() for c in r] for r in rows if any(str(c).strip() for c in r)]
+    width = max((len(r) for r in rows[:200]), default=0)
+    return {"rows": [r + [""] * (width - len(r)) for r in rows[:n]], "width": width, "totalRows": len(rows)}
+
+
+def parse_columns(rows: list[list[str]], name_col: int, pct_col: int, seller_type: str = "Non-Mall") -> dict:
+    """Baca dengan kolom yang ditentukan pengguna: kolom nama biaya/kategori + kolom persen. Baris yang selnya bukan angka dilewati."""
+    rows = [[str(c).strip() for c in r] for r in rows if any(str(c).strip() for c in r)]
+    col_vals = [r[pct_col] for r in rows if pct_col < len(r)]
+    frac = _frac_col(col_vals)
+    comps, cats, skipped = [], [], 0
+    for i, r in enumerate(rows):
+        if pct_col >= len(r) or name_col >= len(r):
+            continue
+        v = _cell_pct(r[pct_col], frac, True)
+        label = r[name_col].strip()
+        if v is None or not label or re.fullmatch(r"[\d.,%\s\-–]+", label):
+            skipped += 1
+            continue
+        full = " ".join(r)
+        if FEE_NAME.search(label) and not (3 <= len(r) and len(label) > 80):
+            comps.append({"name": re.sub(r"\s+", " ", label)[:60], "kind": "percent", "value": v, "cap": None,
+                          "dynamic": False, "enabled": not OPTIONAL.search(full), "note": ("dari berkas: " + full)[:200]})
+        else:
+            cats.append({"label": label[:80], "value": v, "row": i})
+    return _finalize(comps, cats, [f"kolom dipilih manual (nama = kolom {name_col + 1}, persen = kolom {pct_col + 1})."])
+
+
+def parse_loose(rows: list[list[str]], seller_type: str = "Non-Mall") -> dict:
+    """Cadangan bila parse() tidak menemukan apa pun: cari kolom yang isinya mayoritas persen, pakai kolom teks di kirinya sebagai nama.
+    Tetap tanpa mengarang: hanya sel yang benar-benar berisi angka persen yang dipakai."""
+    nonmall = "star" not in seller_type.lower() or "non" in seller_type.lower()
+    rows = [[str(c).strip() for c in r] for r in rows if any(str(c).strip() for c in r)]
+    if not rows:
+        return {"components": [], "overrides": [], "notes": "berkas kosong", "method": "lokal"}
+    width = max(len(r) for r in rows[:500])
+    hdr_i = next((i for i, r in enumerate(rows[:20]) if sum(1 for c in r if c) >= 2 and not any(PCT.search(c) for c in r)
+                  and any(RATE_HDR.search(c) or HDR_WORDS.search(c) for c in r)), None)
+    hdr = rows[hdr_i] if hdr_i is not None else []
+    body = rows[(hdr_i + 1 if hdr_i is not None else 0):]
+    scored = []
+    for j in range(width):
+        col = [r[j] for r in body if j < len(r) and r[j]]
+        if len(col) < 1:
+            continue
+        h = hdr[j] if j < len(hdr) else ""
+        frac = _frac_col(col)
+        hits = [_cell_pct(c, frac, bool(RATE_HDR.search(h))) for c in col]
+        ok = [x for x in hits if x is not None]
+        if ok and len(ok) >= max(1, int(0.5 * len(col))):
+            pref = 1 if (nonmall and NONSTAR.search(h)) or (not nonmall and STARMALL.search(h) and not NONSTAR.search(h)) else 0
+            other = -1 if (nonmall and STARMALL.search(h) and not NONSTAR.search(h)) or (not nonmall and NONSTAR.search(h)) else 0
+            scored.append((pref + other, len(ok), -j, j))
+    if not scored:
+        return {"components": [], "overrides": [], "notes": "tidak ada kolom persen yang dikenali", "method": "lokal"}
+    scored.sort(reverse=True)
+    pct_col = scored[0][3]
+    text_cols = [j for j in range(pct_col) if any(r[j] and not re.fullmatch(r"[\d.,%\s\-–]+", r[j]) for r in body if j < len(r))]
+    if not text_cols:
+        text_cols = [j for j in range(width) if j != pct_col and any(r[j] and not re.fullmatch(r"[\d.,%\s\-–]+", r[j]) for r in body if j < len(r))]
+    if not text_cols:
+        return {"components": [], "overrides": [], "notes": "tidak ada kolom nama di samping kolom persen", "method": "lokal"}
+    comps, cats = [], []
+    frac = _frac_col([r[pct_col] for r in body if pct_col < len(r)])
+    last_parent = ""
+    for i, r in enumerate(body):
+        if pct_col >= len(r):
+            continue
+        v = _cell_pct(r[pct_col], frac, True)
+        names = [r[j] for j in text_cols if j < len(r) and r[j] and not re.fullmatch(r"[\d.,%\s\-–]+", r[j])]
+        if v is None or not names:
+            continue
+        label = names[-1]
+        full = " ".join(r)
+        if FEE_NAME.search(label):
+            comps.append({"name": re.sub(r"\s+", " ", label)[:60], "kind": "percent", "value": v, "cap": None,
+                          "dynamic": bool(re.search(r"(?i)(kategori|dinamis|subkategori)", full)), "enabled": not OPTIONAL.search(full),
+                          "note": ("dari berkas: " + full)[:200]})
+        else:
+            cats.append({"label": label[:80], "value": v, "row": i})
+    note = f"dibaca longgar dari kolom ke-{pct_col + 1}" + (f" ('{hdr[pct_col]}')" if pct_col < len(hdr) and hdr[pct_col] else "") + "."
+    return _finalize(comps, cats, [note])
+
 
 
 def parse_text(text: str, seller_type: str = "Non-Mall") -> dict:
