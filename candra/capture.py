@@ -200,10 +200,10 @@ def capture_items(db: DB, items: list, rights: str = "self_responsible", job_id:
             if errors:
                 raise CaptureError(",".join(errors))
             if raw.get("partial"):  # kartu daftar tidak boleh menimpa data detail (varian/deskripsi) yang sudah ada
-                old = db.one("SELECT raw_data_json FROM products WHERE source_platform=? AND source_product_id=?", (plat, p["source_product_id"]))
+                old = db.one("SELECT id, raw_data_json FROM products WHERE source_platform=? AND source_product_id=?", (plat, p["source_product_id"]))
                 try:
                     if old and not (json.loads(old["raw_data_json"] or "{}").get("extra") or {}).get("partial", True):
-                        raise _KeepDetail()
+                        raise _KeepDetail(old["id"])
                 except (ValueError, TypeError):
                     pass
             why = filter_reason(p, filters) if filters and not raw.get("partial") else None
@@ -229,8 +229,16 @@ def capture_items(db: DB, items: list, rights: str = "self_responsible", job_id:
             title = p["title"]
             canon = f"{plat}:{p['source_product_id']}"
             url = p["source_url"]
-        except _KeepDetail:
+        except _KeepDetail as kd:  # sudah punya data detail: jangan ditimpa, tapi tetap masuk ke collection & hitungan job ini
             same += 1
+            pid = kd.args[0]
+            db.execute("INSERT OR IGNORE INTO collection_products(collection_id, product_id, position, created_at) VALUES(?,?,"
+                       "(SELECT COALESCE(MAX(position),0)+1 FROM collection_products WHERE collection_id=?),?)",
+                       (job["collection_id"], pid, job["collection_id"], now()))
+            url = p["source_url"]
+            db.execute("INSERT INTO scrape_job_items(job_id, input_url, product_url, canonical_id, status, attempt_count, started_at, finished_at)"
+                       " VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(job_id, canonical_id) DO UPDATE SET finished_at=excluded.finished_at",
+                       (job["id"], url, url, f"{plat}:{p['source_product_id']}", "succeeded", 1, now(), now()))
             continue
         except (CaptureError, ValueError, KeyError) as e:
             st, code, msg, title, url = "failed", "CAPTURE_INVALID", str(e), str((raw or {}).get("title", ""))[:70] if isinstance(raw, dict) else "", \

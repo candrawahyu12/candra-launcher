@@ -496,3 +496,18 @@ class V16Tests(unittest.TestCase):
         svc, col = self._svc_col()
         r = svc.refetch_details(col)
         self.assertEqual(r["queued"], 0)                                          # sumber csv: bukan URL Shopee -> tidak ada yang diantre
+
+
+class V17CaptureKeepDetailTests(unittest.TestCase):
+    def test_cards_of_already_detailed_products_still_join_the_new_session(self):
+        from candra import capture as capmod
+        svc = make_svc()
+        det = dict(DETAIL)
+        capmod.capture_items(svc.db, [det])                                   # kiriman detail lebih dulu (partial=False)
+        cards = [dict(card(n), partial=True) for n in range(1, 4)]
+        cards.append(dict(url=det["url"], title=det["title"], price="Rp 87.150", images=det["images"], partial=True))
+        svc.db.execute("UPDATE scrape_job_items SET finished_at='2000-01-01T00:00:00+00:00'")  # sesi lama kedaluwarsa
+        r = capmod.capture_items(svc.db, cards)
+        n = svc.db.one("SELECT COUNT(*) n FROM scrape_job_items WHERE job_id=?", (r["jobId"],))["n"]
+        cp = svc.db.one("SELECT COUNT(*) n FROM collection_products cp JOIN scrape_jobs j ON j.collection_id=cp.collection_id WHERE j.id=?", (r["jobId"],))["n"]
+        self.assertEqual((n, cp), (4, 4))                                     # 4 dikirim -> 4 tampil (dulu yang sudah punya detail hilang diam-diam)

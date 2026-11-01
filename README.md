@@ -116,6 +116,11 @@ bisa berubah; bila data tidak lengkap, klik ikon ekstensi → "Unduh diagnostik 
 - **Bulk Editor**: deskripsi tampil langsung (tanpa "Memuat…"), bisa diedit, dikembalikan ke asli supplier, atau diusulkan Gemini.
 - **Hapus collection** kini ikut menghapus foto olahan, berkas ekspor, dan produk milik collection itu (produk yang dipakai collection lain / sudah pernah diupload dipertahankan).
 
+## v0.17.1 — Perbaikan kirim dari Chrome & tampilan berkedip
+
+- Kartu produk yang sudah pernah diambil lengkap (detail) tidak lagi hilang diam-diam saat dikirim ulang dari halaman Shopee: tetap masuk ke Grab Process baru dan terhitung.
+- Halaman Grabber hanya digambar ulang bila datanya berubah (tidak berkedip); timer tidak menumpuk saat pindah proses.
+
 ## v0.17.0 — Berkas tarif & kategori asli Shopee/Tokopedia dibaca persis
 
 - Pembaca tarif memahami tabel bertingkat (Kategori > Subkategori > Contoh) dengan banyak tabel: Shopee (Komisi Admin + Biaya Proses Pesanan Rp1.250) dan Tokopedia×TikTok Shop (Komisi Platform + Komisi Dinamis maks Rp60.000 + Proses Pesanan Rp1.250). Tiap persen dicatat per komponen dan per baris kategori; kolom min/maks/rata-rata diabaikan.

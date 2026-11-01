@@ -86,6 +86,7 @@ async function pgGrabber(v, arg) {
   v.append(h("h2", {}, "Products Grabber"), h("div", { class: "split" }, side, main));
   const drawSide = async () => {
     const jobs = await api("/api/jobs");
+    const sig = JSON.stringify([jobs, G.sel]); if (sig === drawSide.sig) return; drawSide.sig = sig;
     side.replaceChildren(h("button", { class: "pri", style: "width:100%;margin-bottom:8px", onclick: () => { G.sel = null; drawMain(); drawSide(); } }, "+ Grab baru"),
       ...jobs.map(j => h("div", { class: "proc" + (G.sel === j.jobId ? " on" : ""), onclick: () => { G.sel = j.jobId; drawMain(); drawSide(); } },
         h("div", { class: "row", style: "justify-content:space-between" }, h("b", {}, "Grab Process #" + j.jobId), badge(j.status)),
@@ -153,6 +154,7 @@ async function grabResult(box) {
       table = productTable(pr.items, { simple: true });
       table = h("div", {}, table, h("div", { class: "small mut gap" }, pr.total + " produk"));
     } catch (e) { /* belum ada */ }
+    const sig = JSON.stringify([st, items, table.textContent, table.querySelectorAll("tr").length, page]); if (sig === draw.sig && box.firstChild) return; draw.sig = sig;
     box.replaceChildren(h("div", { class: "card" },
       h("div", { class: "row" }, h("h3", { style: "margin:0" }, "Grab Process #" + id), badge(st.status), h("span", { class: "grow" }),
         active && h("button", { class: "danger", onclick: () => guard(() => api("/api/jobs/" + id + "/cancel", {})) }, "Batalkan"),
@@ -168,7 +170,7 @@ async function grabResult(box) {
       items.length ? h("details", { class: "gap" }, h("summary", {}, items.length + " item gagal"), h("table", {}, ...items.map(i => h("tr", {}, h("td", {}, i.canonical_id), h("td", {}, i.error_code), h("td", { class: "small mut" }, i.error_message_safe))))) : null,
       h("div", { class: "gap" }, table)));
   };
-  await draw(); every(3000, () => guard(draw));
+  await draw(); clearInterval(grabResult.t); grabResult.t = setInterval(() => guard(draw), 3000); timers.push(grabResult.t);
 }
 function saveDialog(jobId, after) {
   const name = h("input", { placeholder: "Nama collection", style: "width:100%" }), desc = h("textarea", { style: "min-height:70px", placeholder: "Deskripsi (opsional)" });
