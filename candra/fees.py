@@ -92,21 +92,38 @@ def validate_overrides(ovs) -> list[dict]:
             raise FeeError("override: value harus angka")
         if not kws or not 0 <= v <= 50:
             raise FeeError("override: keywords wajib dan value 0..50")
-        out.append({"keywords": kws[:15], "value": v})
-    return out[:1500]
+        item = {"keywords": kws[:15], "value": v}
+        comp = str(o.get("component") or "").strip()[:60]
+        if comp:
+            item["component"] = comp          # tarif ini hanya untuk komponen bernama itu (mis. 'Komisi Dinamis' vs 'Komisi Platform')
+        out.append(item)
+    return out[:2500]
+
+
+def _best_override(overrides: list[dict], text: str, comp_name: str):
+    """Tarif kategori yang cocok untuk komponen ini; yang kata kuncinya paling spesifik (terpanjang) menang."""
+    best, best_len = None, -1
+    for o in overrides:
+        if o.get("component") and o["component"].strip().lower() != comp_name.strip().lower():
+            continue
+        hit = max((len(k) for k in o["keywords"] if k in text), default=-1)
+        if hit > best_len:
+            best, best_len = o, hit
+    return best
 
 
 def _effective(comps: list[dict], overrides: list[dict], category_text: str) -> list[dict]:
     text = (category_text or "").lower()
-    ov = next((o for o in overrides if any(k in text for k in o["keywords"])), None)
     res = []
     for c in comps:
         if not c["enabled"]:
             continue
         c2 = dict(c)
-        if ov and c["dynamic"] and c["kind"] == "percent":
-            c2["value"] = ov["value"]
-            c2["overridden"] = True
+        if c["dynamic"] and c["kind"] == "percent":
+            ov = _best_override(overrides, text, c["name"])
+            if ov:
+                c2["value"] = ov["value"]
+                c2["overridden"] = True
         res.append(c2)
     return res
 

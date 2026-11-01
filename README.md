@@ -116,6 +116,12 @@ bisa berubah; bila data tidak lengkap, klik ikon ekstensi → "Unduh diagnostik 
 - **Bulk Editor**: deskripsi tampil langsung (tanpa "Memuat…"), bisa diedit, dikembalikan ke asli supplier, atau diusulkan Gemini.
 - **Hapus collection** kini ikut menghapus foto olahan, berkas ekspor, dan produk milik collection itu (produk yang dipakai collection lain / sudah pernah diupload dipertahankan).
 
+## v0.17.0 — Berkas tarif & kategori asli Shopee/Tokopedia dibaca persis
+
+- Pembaca tarif memahami tabel bertingkat (Kategori > Subkategori > Contoh) dengan banyak tabel: Shopee (Komisi Admin + Biaya Proses Pesanan Rp1.250) dan Tokopedia×TikTok Shop (Komisi Platform + Komisi Dinamis maks Rp60.000 + Proses Pesanan Rp1.250). Tiap persen dicatat per komponen dan per baris kategori; kolom min/maks/rata-rata diabaikan.
+- Gemini memilih baris tarif per produk dari 40 kandidat terdekat (judul + kategori Shopee hasil pemetaan); jawaban di luar baris berkas ditolak, tidak mengarang.
+- Kategori master Shopee (ID + L1–L5, 1701 baris) diimpor penuh; pemetaan Gemini dua tahap (L1 lalu ID) hanya dari daftar kandidat.
+
 ## v0.16.0 — Kategori oleh Gemini, berat & pre-order, tarif per kategori, judul upload terlihat
 - **Kategori marketplace**: dipilih oleh Gemini (membaca judul + kategori sumber, hanya dari daftar resmi yang Anda unggah); aplikasi tidak lagi menebak.
 - **Berat & Pre-order**: kolom di tabel collection + dialog **Berat & Pre-order** (isi sekaligus untuk semua produk, atau per produk). Dipakai di payload upload dan ekspor CSV.

@@ -90,7 +90,105 @@ def _pct_cols(hdr: list[str], seller_nonmall: bool) -> list[int]:
     return pref or []
 
 
+CAT_HDR = re.compile(r"(?i)(kategori|category|subkategori)")
+RATE_COL = re.compile(r"(?i)(komisi|commission|admin\w*).*(%|persen)|(%|persen).*(komisi|commission|admin)")
+FIXED_COL = re.compile(r"(?i)(proses|pemrosesan|penanganan).*(pesanan|order)")
+CAP_COL = re.compile(r"(?i)(batas|maks\w*|cap)\b.*(rp|item)|(rp|item).*(batas|maks\w*)")
+TEXT_COL = re.compile(r"(?i)(kategori|category|subkategori|contoh|rincian|produk|nama)")
+
+
+def _comp_name(hdr: str) -> str:
+    t = re.sub(r"\([^)]*\)", " ", hdr)
+    t = re.sub(r"(?i)\b(toko|reguler|regular|non[\s\-]?star|non[\s\-]?mall|seller)\b", " ", t)
+    t = re.sub(r"\s+", " ", t).strip(" -–:")
+    return (t.title() if t else "Komisi")[:60]
+
+
+def parse_tables(rows: list[list[str]], seller_type: str = "Non-Mall") -> Optional[dict]:
+    """Tabel tarif terstruktur: kolom kategori (+subkategori, contoh) | satu/lebih kolom komisi (%) | kolom biaya proses pesanan (Rp) | batas maks (Rp/item).
+    Tiap kolom komisi = SATU komponen dengan tarif per baris (label baris = 'Kategori > Subkategori > Contoh'). Lebih dari satu tabel di lembar yang sama digabung.
+    Return None bila tidak ada tabel yang dikenali."""
+    nonmall = "star" not in seller_type.lower() or "non" in seller_type.lower()
+    rows = [[str(c).strip() for c in r] for r in rows]
+    comps: dict[str, dict] = {}
+    ovs: dict[tuple, float] = {}
+    fixed: dict[str, dict] = {}
+    n_tables = 0
+    i = 0
+    while i < len(rows):
+        r = rows[i]
+        cells = [c for c in r if c]
+        if len(cells) >= 2 and not any(re.fullmatch(r"[\d.,]+", c) for c in cells) and any(CAT_HDR.search(c) for c in cells) and any(RATE_COL.search(c) for c in r):
+            hdr = r
+            rate_cols = []
+            for j, h in enumerate(hdr):
+                if not h or not RATE_COL.search(h) or re.search(r"(?i)\b(minimum|maksimum|min|max|rata)\w*", h):
+                    continue   # tabel ringkasan min/maks bukan tarif per kategori
+                if nonmall and re.search(r"(?i)(star|mall)", h) and not NONSTAR.search(h):
+                    continue
+                rate_cols.append(j)
+            first_rate = min(rate_cols) if rate_cols else len(hdr)
+            text_cols = [j for j, h in enumerate(hdr) if h and j < first_rate and TEXT_COL.search(h)] or [j for j in range(first_rate) if hdr[j]]
+            fix_col = next((j for j, h in enumerate(hdr) if h and FIXED_COL.search(h) and not RATE_COL.search(h)), None)
+            cap_col = next((j for j, h in enumerate(hdr) if h and CAP_COL.search(h) and re.search(r"(?i)(rp|rupiah)", h)), None)
+            k = i + 1
+            data = 0
+            frac = {j: _frac_col([rows[x][j] for x in range(i + 1, min(i + 600, len(rows))) if j < len(rows[x])]) for j in rate_cols}
+            while k < len(rows):
+                d = rows[k]
+                dc = [c for c in d if c]
+                if len(dc) < 2:
+                    break
+                if any(CAT_HDR.search(c) for c in dc) and not any(re.fullmatch(r"[\d.,]+", c) for c in dc):
+                    break
+                parts = [d[j] for j in text_cols if j < len(d) and d[j]]
+                label = re.sub(r"\s+", " ", " > ".join(parts)).strip().lower()[:120]
+                got = False
+                for j in rate_cols:
+                    v = _cell_pct(d[j], frac[j], True) if j < len(d) else None
+                    if v is None or not label:
+                        continue
+                    name = _comp_name(hdr[j])
+                    c = comps.setdefault(name, {"max": 0.0, "cap": None})
+                    c["max"] = max(c["max"], v)
+                    if cap_col is not None and re.search(r"(?i)dinamis", hdr[j]) and cap_col < len(d):
+                        capv = _num(re.sub(r"(?i)rp\.?", "", d[cap_col]))
+                        if capv and capv > 0:
+                            c["cap"] = max(c["cap"] or 0, capv)
+                    key = (label, name)
+                    ovs[key] = max(ovs.get(key, 0.0), v)
+                    got = True
+                if fix_col is not None and fix_col < len(d):
+                    fv = _num(re.sub(r"(?i)rp\.?", "", d[fix_col]))
+                    if fv and 100 <= fv <= 1e7:
+                        f = fixed.setdefault(re.sub(r"\s+", " ", _comp_name(hdr[fix_col]) if False else re.sub(r"\([^)]*\)", "", hdr[fix_col])).strip().title()[:60] or "Biaya Proses Pesanan", {})
+                        f[fv] = f.get(fv, 0) + 1
+                if got:
+                    data += 1
+                k += 1
+            if data >= 3:
+                n_tables += 1
+            i = k
+            continue
+        i += 1
+    if not n_tables or not ovs:
+        return None
+    out_c = []
+    for name, c in comps.items():
+        out_c.append({"name": name, "kind": "percent", "value": c["max"], "cap": c["cap"], "dynamic": True, "enabled": bool(COUNTED.search(name)),
+                      "note": "tarif per kategori dari berkas; tarif cadangan = tertinggi di tabel" + (f"; batas Rp{c['cap']:,.0f}/item".replace(",", ".") if c["cap"] else "")})
+    for name, vals in fixed.items():
+        v = max(vals, key=lambda x: vals[x])
+        out_c.append({"name": name, "kind": "fixed", "value": v, "cap": None, "dynamic": False, "enabled": True, "note": f"nominal tetap per pesanan dari berkas (Rp{v:,.0f})".replace(",", ".")})
+    overrides = [{"keywords": [lab], "value": v, "component": nm} for (lab, nm), v in sorted(ovs.items(), key=lambda kv: -len(kv[0][0]))]
+    return {"components": out_c[:20], "overrides": overrides, "method": "lokal",
+            "notes": f"{len(overrides)} tarif per kategori dari {n_tables} tabel; komponen: " + ", ".join(c["name"] for c in out_c) + "."}
+
+
 def parse(rows: list[list[str]], seller_type: str = "Non-Mall") -> dict:
+    structured = parse_tables(rows, seller_type)
+    if structured:
+        return structured
     nonmall = "star" not in seller_type.lower() or "non" in seller_type.lower()
     rows = [[str(c).strip() for c in r] for r in rows if any(str(c).strip() for c in r)]
     hdr: list[str] = []

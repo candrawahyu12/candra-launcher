@@ -453,6 +453,37 @@ class V16Tests(unittest.TestCase):
         self.assertEqual(r["mapped"], 1)                                          # label di luar tabel berkas ditolak
         self.assertEqual(svc.db.one("SELECT label FROM product_fee_category WHERE product_id=?", (pid,))["label"], "pakaian")
 
+    def test_ai_fee_pick_must_be_in_products_own_shortlist(self):
+        import os as _os
+        svc, col = self._svc_col()
+        names = ["Alat Musik", "Buku", "Mainan", "Olahraga", "Otomotif", "Pakaian"] + [f"Kategori Lain {i}" for i in range(60)]
+        csv = ("Kategori,Komisi\n" + "\n".join(f"{n},{5 + i % 5}%" for i, n in enumerate(names))).encode()
+        sg = svc.fees_from_file("shopee", "t.csv", csv)["suggestion"]
+        svc.set_fee_profile("shopee", sg["components"], sg["overrides"], True, "t")
+        pid = svc._products_in(col)[0]["id"]
+        _os.environ["GEMINI_API_KEY"] = "AQ.dummy_key_for_tests_1234567890"
+        try:
+            g = svc.providers["gemini"]; g.min_interval = 0.0
+            seen = {}
+            def tr(u, h, b):
+                seen["prompt"] = b.decode() if isinstance(b, bytes) else str(b)
+                return _gem(json.dumps([{"product": pid, "kategori": "Kategori Lain 59"}]))
+            g.transport = tr
+            r = svc.ai_map_fee_categories(col, "shopee", [pid])
+        finally:
+            _os.environ.pop("GEMINI_API_KEY", None)
+        self.assertIn("kandidat_tarif", seen["prompt"])
+        self.assertLessEqual(seen["prompt"].count("kategori lain"), 41)           # hanya <=40 kandidat per produk, bukan seluruh tabel
+
+    def test_real_layout_two_tables_component_scoped(self):
+        from candra import feetable as F
+        rows = [["Kategori", "Subkategori", "Komisi Platform (%)"]] + [["Makanan", f"Camilan {i}", f"{9 + i % 2}%"] for i in range(4)] + [[], \
+                ["Kategori", "Subkategori", "Komisi Dinamis (%)", "Batas maksimum (Rp/item)"]] + [["Makanan", f"Camilan {i}", "6.5%", "Rp60.000"] for i in range(4)]
+        r = F.parse(rows, "Non-Mall")
+        comps = {c["name"] for c in r["components"]}
+        self.assertTrue(any("Platform" in c for c in comps)); self.assertTrue(any("Dinamis" in c for c in comps))
+        self.assertEqual({o.get("component") for o in r["overrides"]} - {None}, {c for c in comps if "Platform" in c or "Dinamis" in c})
+
     def test_price_advice_lists_every_variant_with_name_and_price(self):
         svc, col = self._svc_col()
         r = svc.price_advice(col, marketplace="shopee", target_margin_pct=10)
