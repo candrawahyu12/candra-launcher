@@ -145,6 +145,19 @@
     return miss;
   }
 
+  // Nama toko supplier (dibuang dari judul/deskripsi oleh pembersih): baris pertama di blok toko dekat tombol "Lihat/Kunjungi Toko"
+  function shopName() {
+    try {
+      const btn = [...document.querySelectorAll("a,button,div,span")].find(e => e.children.length === 0 && /^(lihat toko|kunjungi toko|lihat shop|visit shop|view shop)$/i.test((e.textContent || "").trim()));
+      let n = btn;
+      for (let d = 0; n && d < 5; d++, n = n.parentElement) {
+        const lines = (n.innerText || "").split(/\n+/).map(x => x.trim()).filter(x => x && x.length >= 3 && x.length <= 60 && !/^(chat|lihat|kunjungi|aktif|online|follow|ikuti|penilaian|produk|bergabung|\d)/i.test(x));
+        if (lines.length) return lines[0];
+      }
+    } catch (e) { /* abaikan */ }
+    return "";
+  }
+
   function extractDetail() {
     const ld = ldProduct();
     const offer = ld && (Array.isArray(ld.offers) ? ld.offers[0] : ld.offers) || {};
@@ -171,7 +184,7 @@
     const stock = (body.match(/stok\s*:?\s*(\d+)/i) || [])[1];
     const groups = variantGroups();
     return {
-      url: cleanUrl(location.href), title, description: (ld && ld.description) || sectionText(true) || meta("og:description"),
+      url: cleanUrl(location.href), shop_name: shopName(), title, description: (ld && ld.description) || sectionText(true) || meta("og:description"),
       price, category: breadcrumb(), images: [...imgs].filter(Boolean).slice(0, 9), sold, rating, review_count: reviews, stock,
       variants: combos(groups), _variantGroups: groups
     };
@@ -313,7 +326,9 @@
     all.onclick = async () => {
       const cards = cardAnchors().slice(0, 60);
       if (!cards.length) { msg.textContent = "Tidak ada kartu produk terdeteksi di halaman ini."; return; }
-      all.disabled = true; report(await send(cards.map(extractCard)), cards.length); all.disabled = false;
+      all.disabled = true; const rr = await send(cards.map(c => Object.assign(extractCard(c), { partial: true })), cards.length); report(rr, cards.length);
+      if (rr.ok && rr.result && rr.result.queuedDetails) { msg.textContent += " | " + rr.result.queuedDetails + " produk dibuka otomatis untuk ambil varian & deskripsi (jangan tutup Chrome)"; chrome.runtime.sendMessage({ type: "queueRun" }, () => {}); }
+      all.disabled = false;
     };
     panel.insertBefore(all, msg);
     document.body.appendChild(panel);

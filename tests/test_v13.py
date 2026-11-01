@@ -511,3 +511,35 @@ class V17CaptureKeepDetailTests(unittest.TestCase):
         n = svc.db.one("SELECT COUNT(*) n FROM scrape_job_items WHERE job_id=?", (r["jobId"],))["n"]
         cp = svc.db.one("SELECT COUNT(*) n FROM collection_products cp JOIN scrape_jobs j ON j.collection_id=cp.collection_id WHERE j.id=?", (r["jobId"],))["n"]
         self.assertEqual((n, cp), (4, 4))                                     # 4 dikirim -> 4 tampil (dulu yang sudah punya detail hilang diam-diam)
+
+
+class V18Tests(unittest.TestCase):
+    def test_launch_command_uses_separate_profile_and_extension(self):
+        from candra import chromelaunch as cl
+        import tempfile
+        calls = []
+        old = cl.find_chrome; cl.find_chrome = lambda: "/usr/bin/chrome"
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                r = cl.launch("shopee", d, os.path.join(d, "ext"), popen=lambda cmd, **k: calls.append(cmd))
+                self.assertTrue(r["firstRun"]); self.assertTrue(os.path.isdir(os.path.join(d, "chrome_profile")))
+            cmd = calls[0]
+            self.assertTrue(any(a.startswith("--user-data-dir=") and a.endswith("chrome_profile") for a in cmd))   # bukan profil Chrome utama
+            self.assertTrue(any(a.startswith("--load-extension=") for a in cmd)); self.assertIn("seller.shopee.co.id", cmd[-1])
+            with self.assertRaises(ValueError):
+                cl.launch("lazada", "/tmp", "/tmp")
+        finally:
+            cl.find_chrome = old
+
+    def test_cards_from_page_queue_detail_pages_and_shop_name_is_scraped(self):
+        svc = make_svc()
+        det = dict(DETAIL, shop_name="Toko Oxide Jaya", description="Bahan plastik tebal")
+        svc.capture_products([dict(card(1), partial=True), dict(card(2), partial=True)], svc.capture_token)
+        r = svc.capture_products([dict(card(3), partial=True)], svc.capture_token)
+        self.assertEqual(r["queuedDetails"], 1)
+        n = svc.db.one("SELECT COUNT(*) n FROM grab_queue WHERE kind='detail' AND status='pending'")["n"]
+        self.assertEqual(n, 3)
+        svc.capture_products([det], svc.capture_token)
+        cid = svc.db.one("SELECT collection_id c FROM scrape_jobs WHERE source_platform='browser_capture' ORDER BY id DESC")["c"]
+        self.assertIn("Toko Oxide Jaya", svc._shop_names(cid))
+        self.assertEqual(svc.fees_from_file.__name__, "fees_from_file")

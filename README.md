@@ -116,6 +116,13 @@ bisa berubah; bila data tidak lengkap, klik ikon ekstensi → "Unduh diagnostik 
 - **Bulk Editor**: deskripsi tampil langsung (tanpa "Memuat…"), bisa diedit, dikembalikan ke asli supplier, atau diusulkan Gemini.
 - **Hapus collection** kini ikut menghapus foto olahan, berkas ekspor, dan produk milik collection itu (produk yang dipakai collection lain / sudah pernah diupload dipertahankan).
 
+## v0.18.0 — Varian & deskripsi otomatis, tarif tersimpan, Chrome terpisah ala Qlobot
+
+- Kartu produk yang dikirim dari halaman daftar Shopee/Tokopedia otomatis diantre untuk dibuka satu per satu (semua varian + deskripsi). Batas varian naik (maks 300 kombinasi); semua varian bisa dibuka di tabel.
+- Berkas tarif yang pernah diunggah dipakai otomatis (tanpa unggah/simpan ulang). Tombol Hitung cepat: Gemini hanya memilih tarif untuk produk yang belum pernah dipilihkan; hitungan tarif di-cache.
+- Nama toko supplier dibaca dari halaman (Tokopedia dari alamat toko, Shopee dari blok toko) dan ikut dibuang dari judul & deskripsi.
+- Uploader 'Isi form': Chrome TERPISAH (profil khusus di data/chrome_profile, bukan akun utama) terbuka ke Seller Center; Anda login/OTP/CAPTCHA sendiri, lalu panel CANDRA memuat antrean dan mengisi form produk pertama otomatis; Anda yang menekan kirim. Ekstensi 0.4.0 (muat ulang dari folder chrome_extension).
+
 ## v0.17.1 — Perbaikan kirim dari Chrome & tampilan berkedip
 
 - Kartu produk yang sudah pernah diambil lengkap (detail) tidak lagi hilang diam-diam saat dikirim ulang dari halaman Shopee: tetap masuk ke Grab Process baru dan terhitung.

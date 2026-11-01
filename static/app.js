@@ -190,7 +190,7 @@ function productTable(items, o = {}) {
     h("tbody", {}, ...items.map((p, i) => h("tr", { class: o.markable && o.marks.has(p.id) ? "marked" : "" }, o.markable && h("td", {}, h("input", { type: "checkbox", checked: o.marks.has(p.id), onchange: e => o.onMark(p.id, e.target.checked) })), sel && h("td", {}, h("input", { type: "checkbox", checked: !!p.selected, onchange: e => o.onSelect && o.onSelect(p.id, e.target.checked) })),
       h("td", {}, (p.position || i + 1)), h("td", {}, p.thumb ? h("img", { class: "thumb", src: p.thumb, referrerpolicy: "no-referrer", loading: "lazy", onerror: e => e.target.style.visibility = "hidden" }) : null),
       h("td", { style: "max-width:320px" }, h("a", { href: "#", onclick: e => { e.preventDefault(); productDialog(p.id); } }, p.title), p.edited ? h("span", { class: "badge warn", style: "margin-left:6px" }, "diedit") : null, p.uploadTitle && p.uploadTitle !== p.title ? h("div", { class: "small", style: "color:var(--ok,#7bd88f)", title: "Awalan/akhiran dari Collection Settings ditambahkan saat upload/export" }, "↳ judul saat upload: " + p.uploadTitle) : null),
-      h("td", { class: "var" }, ...(p.variantItems || []).slice(0, 3).map(x => h("div", {}, x.label + " · ", h("b", {}, rp(x.price)))), p.variants > 3 ? h("div", {}, (p.variants - 3) + " Varian Lainnya") : null),
+      h("td", { class: "var" }, ...(p.variantItems || []).slice(0, 3).map(x => h("div", {}, x.label + " · ", h("b", {}, rp(x.price)))), p.variants > 3 ? h("details", {}, h("summary", { class: "small mut" }, (p.variants - 3) + " Varian Lainnya"), ...(p.variantItems || []).slice(3).map(x => h("div", { class: "small" }, x.label + " · ", h("b", {}, rp(x.price))))) : null),
       h("td", {}, p.priceMin != null && p.priceMax != null && p.priceMin !== p.priceMax ? rp(p.priceMin) + " – " + rp(p.priceMax) : rp(p.price_original), p.price_before_discount ? h("div", { class: "small mut", style: "text-decoration:line-through" }, rp(p.price_before_discount)) : null),
       h("td", {}, p.stock_original ?? "-"), !o.simple && h("td", {}, p.weightGram ? p.weightGram + " g" : h("span", { class: "mut" }, "-")), !o.simple && h("td", {}, p.preorderDays ? p.preorderDays + " hari" : h("span", { class: "mut" }, "Tidak")), h("td", {}, p.sold_count ?? "-"), h("td", {}, p.rating != null ? p.rating + (p.review_count ? " (" + p.review_count + ")" : "") : "-"),
       !o.simple && h("td", { class: "small" }, p.category || h("span", { class: "mut" }, "-")), !o.simple && h("td", {}, h("span", { class: "badge" }, p.rights_status)))))));
@@ -713,6 +713,7 @@ function priceDialog(id) {
   const VER = { RUGI: ["bad", "Rugi di harga kini"], TIDAK_BISA_BERSAING: ["bad", "Tidak bisa bersaing"], MARGIN_TIPIS_JIKA_SAMAI: ["warn", "Margin tipis jika disamai"], TERLALU_MAHAL: ["warn", "Terlalu mahal"], KOMPETITIF: ["ok", "Kompetitif"], TANPA_PEMBANDING: ["", "Tanpa pembanding"], REKOMENDASI_SIAP: ["ok", "Siap: pakai harga rekomendasi"], HARGA_BELUM_DIATUR: ["warn", "Harga jual belum diatur"], MODAL_TIDAK_ADA: ["bad", "Modal kosong"], BIAYA_TERLALU_BESAR: ["bad", "Biaya terlalu besar"] };
   const feeRows = b => b ? h("div", { class: "small" }, ...b.items.map(i => h("div", {}, i.name + ": " + rp(i.amount) + (i.capped ? " (kena batas)" : "") + (i.overridden ? " (tarif kategori)" : ""))), h("div", {}, h("b", {}, "Total biaya " + rp(b.total) + " · laba " + rp(b.profit) + " (" + b.marginPct.toFixed(1) + "%)"))) : "-";
   const run = () => guard(async () => {
+    out.replaceChildren(h("div", { class: "mut" }, "Menghitung… (Gemini hanya dipanggil untuk produk yang belum pernah dipilihkan tarifnya)"));
     try {  // Gemini membaca tiap produk dan memilih baris tarif komisi dari berkas tarif Anda (hanya yang belum dipilih)
       const ai = ((await api("/api/ai")).providers || []).find(p => p.name === "gemini");
       if (ai && ai.ready) { const fc = await api("/api/collections/" + id + "/fee-categories", { marketplace: mk.value }); if (fc.mapped) toast("Gemini memilih tarif komisi untuk " + fc.mapped + " produk"); if (fc.note) toast(fc.note, true); }
@@ -732,7 +733,7 @@ function priceDialog(id) {
   });
   modal("Harga & Kompetitor (sadar biaya platform)", h("div", {}, h("div", { class: "note" }, "Harga rekomendasi = harga terkecil yang masih memberi laba bersih sesuai target SETELAH semua biaya platform (komisi dinamis per kategori, batas maksimum, biaya tetap, biaya lain) dan biaya tambahan Anda. Harga kompetitor diisi manual/CSV, atau dicari Gemini + Google Search (hasil AI harus Anda verifikasi)."),
     h("div", { class: "row gap" }, h("label", {}, "Marketplace", mk), h("button", { onclick: () => feeDialog(mk.value, () => priceDialog(id)) }, "⚙️ Biaya platform"), h("label", {}, "Markup / laba (%)", margin), h("label", {}, "Markup tetap (Rp)", markupRp), h("label", {}, "Biaya packing dll (Rp)", extra),
-      h("label", { class: "chk" }, useAi, "Pakai harga kompetitor hasil AI"), h("button", { class: "pri", onclick: run }, "Hitung")),
+      h("label", { class: "chk", title: "Tombol 'Cari harga kompetitor dengan AI' meminta Gemini + Google Search mencari harga produk serupa. Hasilnya ditandai 'AI ·' dan bisa salah, jadi bawaannya TIDAK dipakai menentukan harga. Centang ini hanya bila Anda sudah memeriksa harga-harga itu." }, useAi, "Pakai harga kompetitor hasil AI (opsional)"), h("button", { class: "pri", onclick: run }, "Hitung")),
     h("div", { class: "row gap" }, h("button", { onclick: () => guard(async () => {
         const body = { marketplace: mk.value, targetMarginPct: +margin.value, extraCost: +extra.value || 0, markupFixed: +markupRp.value || 0, useAiPrices: useAi.checked };
         const pv = await api("/api/collections/" + id + "/apply-prices", { ...body, apply: false });
@@ -883,7 +884,12 @@ function previewDialog(pv, isExport, redo, colId, mk) {
     h("div", { class: "row gap" }, h("span", { class: "grow" }), h("button", { onclick: closeModal }, "Batal"),
       h("button", { class: "pri", disabled: !pv.valid, onclick: () => guard(async () => {
         const r = await api("/api/batches/" + pv.batchId + "/confirm", { confirm: true, idempotencyKey: key, previewHash: pv.previewHash });
-        closeModal(); toast(r.status === "AWAITING_FILL" ? "Antrean siap di ekstensi — buka Seller Center, klik ikon CANDRA, lalu 'Isi form'." : "Proses dijalankan… Cek Process Monitor"); location.hash = "#/monitor/upload-" + pv.batchId;
+        closeModal();
+        if (r.status === "AWAITING_FILL") {  // ala Qlobot: Chrome terpisah terbuka sendiri ke Seller Center; login/OTP/CAPTCHA Anda yang kerjakan
+          try { const o = await api("/api/browser/seller-open", { marketplace: r.marketplace || "shopee" }); toast("Chrome terpisah dibuka ke Seller Center. " + o.note); }
+          catch (e) { toast("Chrome tidak bisa dibuka otomatis: " + e.message + " — pakai tombol 'Buka Seller Center' di Process Monitor.", true); }
+        } else toast("Proses dijalankan… Cek Process Monitor");
+        location.hash = "#/monitor/upload-" + pv.batchId;
       }) }, "KONFIRMASI & MULAI (" + pv.valid + ")"))), true);
 }
 
@@ -917,7 +923,9 @@ async function pgMonitor(v, arg) {
       const c = r.counts || {}, n = Object.values(c).reduce((a, b) => a + b, 0);
       head.replaceChildren(h("div", { class: "row" }, h("h3", { style: "margin:0" }, "Uploading #" + M.sel.id + " · " + n + " Target - " + (c.SUCCEEDED || 0) + " Success - " + ((c.FAILED || 0) + (c.UNCERTAIN || 0)) + " Failed"), badge(r.status)));
       actions.replaceChildren(
-        r.status === "AWAITING_FILL" && h("span", { class: "badge warn" }, "Menunggu Anda: buka Seller Center → panel CANDRA · Isi Form → kirim sendiri"),
+        r.status === "AWAITING_FILL" && h("span", { class: "badge warn" }, "Menunggu Anda: login/OTP/CAPTCHA di Chrome terpisah → panel CANDRA di kanan bawah mengisi form → Anda kirim sendiri"),
+        r.status === "AWAITING_FILL" && h("select", { id: "sellermk" }, ...[["shopee", "Shopee"], ["tokopedia", "Tokopedia"], ["tiktok", "TikTok Shop"]].map(([k, l]) => h("option", { value: k }, l))),
+        r.status === "AWAITING_FILL" && h("button", { class: "pri", onclick: () => guard(async () => { const o = await api("/api/browser/seller-open", { marketplace: $("#sellermk").value }); toast(o.note); }) }, "🌐 Buka Seller Center (Chrome terpisah)"),
         ["QUEUED", "PROCESSING", "AWAITING_FILL"].includes(r.status) && h("button", { class: "danger", onclick: () => guard(() => api("/api/batches/" + M.sel.id + "/cancel", {})) }, "Batalkan"),
         ["PAUSED", "PARTIAL_FAILED", "FAILED"].includes(r.status) && h("button", { onclick: () => guard(async () => { await api("/api/batches/" + M.sel.id + "/retry-failed", {}); await api("/api/batches/" + M.sel.id + "/resume", {}); toast("Diulang"); }) }, "Ulangi yang gagal / lanjutkan"),
         r.exportFile && r.exportFile.file && h("a", { class: "btn", href: "/download/" + encodeURIComponent(r.exportFile.file), download: r.exportFile.file }, "⬇ Unduh CSV (" + (r.exportFile.file) + ")"));

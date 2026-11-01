@@ -175,10 +175,15 @@ def clean_text(text: str, types: Iterable[str], shop_names: Iterable[str] = (), 
                 body = _drop_clauses(body, PROMO, "promo", removed)
         if "welcome" in types and not is_title and WELCOME.search(body):
             body = _drop_clauses(body, WELCOME, "welcome", removed)
+        shop_hit = False
         for kind, rx in span_rules:
             for m in rx.finditer(body):
                 removed.append({"type": kind, "text": m.group(0)})
+                shop_hit = shop_hit or kind == "shop_name"
             body = rx.sub("", body)
+        if shop_hit:  # kata depan yang tertinggal setelah nama toko dibuang: "order di  ya kak" -> "order ya kak"
+            body = re.sub(r"(?i)\b(?:di|dari|oleh|by|from|via)\s+(?=[,.!?;:]|$|ya\b|kak\b|kakak\b)", "", body)
+            body = re.sub(r"\s{2,}", " ", body)
         if "contact_label" in types:
             body = ORPHAN_LABEL.sub("", body)  # label tanpa isi ("WA:") sisa dari pembersihan lain
             if any(r["type"] in ("phone", "url", "handle") for r in removed):

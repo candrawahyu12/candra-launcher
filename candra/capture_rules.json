@@ -11,5 +11,5 @@
   "gallery_min_px": 250,
   "tokopedia_non_product_segments": ["search", "p", "discovery", "find", "promo", "help", "cart", "about"],
   "click_delay_ms": 350,
-  "max_variant_combos": 30
+  "max_variant_combos": 300
 }

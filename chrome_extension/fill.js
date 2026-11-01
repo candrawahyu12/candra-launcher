@@ -142,5 +142,21 @@
     const d = candidates().map(e => ({ kind: kindOf(e), direct: direct(e).slice(0, 80), near: nearby(e).map(x => x[1].slice(0, 40)) }));
     copy(JSON.stringify(d, null, 1)); render("Daftar " + d.length + " kolom disalin ke clipboard (tanpa isi/nilai). Kirim ke pengembang bila ada yang tidak terisi.");
   }
-  document.documentElement.append(host); render("Klik 'Muat antrean'.");
+  document.documentElement.append(host); render("Memuat antrean dari CANDRA…");
+  // Ala Qlobot: panel memuat antrean sendiri; begitu form tambah produk terbuka (setelah Anda login), produk pertama diisi otomatis SEKALI.
+  // Tombol kirim tetap Anda yang menekan; login/OTP/CAPTCHA Anda kerjakan sendiri.
+  const tried = new Set(); let busy = false;
+  const ADD_URL = /seller\.shopee\.co\.id/.test(location.hostname) ? "https://seller.shopee.co.id/portal/product/new" : "";
+  async function tick() {
+    if (busy || cur) return; busy = true;
+    try {
+      await loadQueue();
+      if (ADD_URL && queue.length && !/\/product\/new|\/product\/(add|create)/.test(location.pathname) && !/signin|login|verify/.test(location.pathname)) {
+        render(queue.length + " produk menunggu. Membuka form tambah produk…"); location.href = ADD_URL; return;
+      }
+      const first = queue.find(q => !tried.has(q.itemId));
+      if (first && rules && findField("title", new Set()).el) { tried.add(first.itemId); await start(first.itemId); }
+    } catch (e) { /* coba lagi pada putaran berikut */ } finally { busy = false; }
+  }
+  tick(); setInterval(tick, 5000);
 })();

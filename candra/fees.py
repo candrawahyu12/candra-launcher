@@ -100,8 +100,20 @@ def validate_overrides(ovs) -> list[dict]:
     return out[:2500]
 
 
+_OV_CACHE: dict = {}
+
+
 def _best_override(overrides: list[dict], text: str, comp_name: str):
-    """Tarif kategori yang cocok untuk komponen ini; yang kata kuncinya paling spesifik (terpanjang) menang."""
+    """Tarif kategori yang cocok untuk komponen ini; yang kata kuncinya paling spesifik (terpanjang) menang. Hasil di-cache per daftar tarif
+    (hitungan harga memanggil ini ratusan kali per produk)."""
+    ent = _OV_CACHE.get(id(overrides))
+    if ent is None or ent[0] is not overrides:
+        if len(_OV_CACHE) > 8:
+            _OV_CACHE.clear()
+        ent = _OV_CACHE[id(overrides)] = (overrides, {})
+    key = (text, comp_name)
+    if key in ent[1]:
+        return ent[1][key]
     best, best_len = None, -1
     for o in overrides:
         if o.get("component") and o["component"].strip().lower() != comp_name.strip().lower():
@@ -109,6 +121,7 @@ def _best_override(overrides: list[dict], text: str, comp_name: str):
         hit = max((len(k) for k in o["keywords"] if k in text), default=-1)
         if hit > best_len:
             best, best_len = o, hit
+    ent[1][key] = best
     return best
 
 

@@ -332,6 +332,8 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
                 return svc.bulk_stock(int(m[1]), b.get("productIds"), b.get("op", ""), b.get("value"), bool(b.get("apply")), actor="ui")
             if m := re.fullmatch(r"/api/fill/item/(\d+)/done", path):
                 return svc.fill_done(self.headers.get("X-Candra-Token"), int(m[1]), str(b.get("state", "")), str(b.get("note", "")))
+            if path == "/api/browser/seller-open":
+                return svc.open_seller_center(str(b.get("marketplace", "shopee")))
             if path == "/api/capture":
                 return svc.capture_products(b.get("items"), self.headers.get("X-Candra-Token"), b.get("jobId"))
             if path == "/api/grab/next":

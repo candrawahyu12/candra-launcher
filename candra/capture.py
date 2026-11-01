@@ -18,7 +18,7 @@ from .jobs import upsert_product
 from .util import now, parse_int, parse_price, redact
 
 MAX_ITEMS = 60
-MAX_IMAGES, MAX_VARIANTS, MAX_DESC = 9, 100, 5000
+MAX_IMAGES, MAX_VARIANTS, MAX_DESC = 9, 400, 5000
 SESSION_MINUTES = 60
 
 _HOSTS = (("shopee.co.id", "shopee_capture"), ("tokopedia.com", "tokopedia_capture"))
@@ -143,7 +143,12 @@ def normalize(raw: dict) -> tuple[str, dict]:
         p["variants"].append({"source_variant_id": f"{pid}-v{i}", "options": opts, "sku": None,
                               "price": _price_range(v.get("price"))[0] or p["price"], "stock": parse_count(v.get("stock")),
                               "image": vimg if vimg.startswith("https://") and len(vimg) <= 600 else None})
-    p["extra"] = {"captured_from": "browser_extension", "partial": bool(raw.get("partial")), "price_max": price_max}
+    shop = re.sub(r"\s+", " ", str(raw.get("shop_name") or "")).strip()[:60]
+    if not shop and plat == "tokopedia_capture":  # alamat Tokopedia: tokopedia.com/<nama-toko>/<produk>
+        seg = [x for x in urlsplit(p["source_url"]).path.split("/") if x]
+        if len(seg) >= 2 and seg[0] not in ("p", "discovery", "find", "search", "s", "product", "shop"):
+            shop = seg[0].replace("-", " ")
+    p["extra"] = {"captured_from": "browser_extension", "partial": bool(raw.get("partial")), "price_max": price_max, "shop_name": shop}
     return plat, p
 
 

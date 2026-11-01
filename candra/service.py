@@ -215,7 +215,7 @@ class CandraService:
             opts = [json.loads(v["option_values_json"] or "{}") for v in vs]
             r["variantAttr"] = " / ".join(sorted({k for o in opts for k in o})) if opts else ""
             r["variantItems"] = [{"label": " / ".join(str(x) for x in o.values()) or "-", "price": v["price_original"],
-                                  "stock": v["stock_original"]} for v, o in zip(vs[:3], opts[:3])]
+                                  "stock": v["stock_original"]} for v, o in zip(vs, opts)]
             prices = [v["price_original"] for v in vs if v["price_original"]]
             r["priceMax"] = max(prices) if prices else None
             r["priceMin"] = min(prices) if prices else None
@@ -310,8 +310,17 @@ class CandraService:
     def _shop_names(self, collection_id: int, given: Optional[list[str]] = None) -> list[str]:
         """Nama toko/merek yang harus hilang: yang diketik pengguna + yang tersimpan di Collection Settings (hasil pembersihan sebelumnya)."""
         saved = json.loads(self._need_collection(collection_id)["settings_json"] or "{}").get("shop_names") or []
+        scraped: list[str] = []  # nama toko supplier yang terbaca saat grab (extra.shop_name)
+        for r in self.db.query("SELECT p.raw_data_json FROM products p JOIN collection_products cp ON cp.product_id=p.id WHERE cp.collection_id=? LIMIT 400", (collection_id,)):
+            try:
+                n = ((json.loads(r["raw_data_json"] or "{}").get("extra") or {}).get("shop_name") or "").strip()
+            except (ValueError, TypeError, AttributeError):
+                n = ""
+            for v in (n, re.sub(r"(?i)^(?:toko|store|shop|official|olshop)\s+", "", n).strip()):  # "Toko Oxide Jaya" -> juga "Oxide Jaya"
+                if len(v) >= 4 and v.lower() not in GENERIC_WORDS and v.lower() not in {x.lower() for x in scraped}:
+                    scraped.append(v)
         out, seen = [], set()
-        for n in list(given or []) + list(saved):
+        for n in list(given or []) + list(saved) + scraped:
             n = str(n).strip()
             if len(n) >= 2 and n.lower() not in seen:
                 seen.add(n.lower()); out.append(n[:60])
@@ -940,7 +949,13 @@ class CandraService:
         return self.uploads.create_batch(**kw)
 
     def confirm_upload(self, batch_id: int, **kw) -> dict:
-        return self.uploads.confirm(batch_id, **kw)
+        r = self.uploads.confirm(batch_id, **kw)
+        b = self.db.one("SELECT config_json FROM upload_batches WHERE id=?", (batch_id,))
+        try:
+            r = dict(r, marketplace=(json.loads(b["config_json"] or "{}").get("marketplace")) if b else None)
+        except (ValueError, TypeError, AttributeError):
+            pass
+        return r
 
     def export_collection(self, collection_id: int, template: str = "generic", config: Optional[dict] = None,
                           product_ids: Optional[list[int]] = None) -> dict:
@@ -1257,8 +1272,38 @@ class CandraService:
         if not capmod.token_ok(self.capture_token, token):
             raise PermissionError("token ekstensi salah")
         try:
-            return capmod.capture_items(self.db, items, job_id=job_id)
+            r = capmod.capture_items(self.db, items, job_id=job_id)
         except capmod.CaptureError as e:
+            raise ServiceError(str(e))
+        if job_id is None:  # kartu dari halaman daftar: otomatis antre buka halaman tiap produk (varian + deskripsi seperti judul)
+            urls = []
+            for raw in items:
+                if not (isinstance(raw, dict) and raw.get("partial")):
+                    continue
+                try:
+                    plat, p = capmod.normalize(raw)
+                except capmod.CaptureError:
+                    continue
+                old = self.db.one("SELECT raw_data_json FROM products WHERE source_platform=? AND source_product_id=?", (plat, p["source_product_id"]))
+                try:
+                    full = bool(old) and not (json.loads(old["raw_data_json"] or "{}").get("extra") or {}).get("partial", True)
+                except (ValueError, TypeError):
+                    full = False
+                if not full:
+                    urls.append(p["source_url"])
+            r["queuedDetails"] = bgrab.enqueue_details(self.db, r["jobId"], urls, 5000) if urls else 0
+            if r["queuedDetails"]:
+                bgrab.refresh_job(self.db, r["jobId"])
+        return r
+
+    def open_seller_center(self, marketplace: str, popen=None) -> dict:
+        """Buka Chrome terpisah (profil khusus CANDRA) ke Seller Center, ala Qlobot. Login/OTP/CAPTCHA tetap Anda kerjakan sendiri."""
+        from . import chromelaunch
+        ext = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "chrome_extension")
+        try:
+            kw = {"popen": popen} if popen else {}
+            return chromelaunch.launch(marketplace, self.data_dir, ext, **kw)
+        except (ValueError, FileNotFoundError, OSError) as e:
             raise ServiceError(str(e))
 
     # ---- antrean Grabber untuk ekstensi (Shopee/Tokopedia dibaca di Chrome pengguna)
@@ -1792,7 +1837,32 @@ class CandraService:
             prof = json.loads(raw)
             prof["customized"] = True
             return prof
+        auto = self._auto_profile_from_saved_file(marketplace)  # berkas tarif yang pernah diunggah dipakai langsung: tidak perlu unggah/simpan ulang
+        if auto:
+            return auto
         return feemod.DEFAULT_PROFILES[marketplace] | {"customized": False}
+
+    def _auto_profile_from_saved_file(self, marketplace: str) -> Optional[dict]:
+        saved = self._load_fee_file(marketplace)
+        if not saved:
+            return None
+        try:
+            info = filetext.read_upload(saved[0], saved[1])
+            if info["kind"] == "inline":
+                return None
+            rows = info.get("rows") if info.get("rows") is not None else feetable.to_rows(info["text"])
+            loc = feetable.parse(rows, "Non-Mall (Non-Star / reguler)")
+            if not (loc["components"] or loc["overrides"]):
+                return None
+            base = feemod.DEFAULT_PROFILES[marketplace]
+            prof = {"label": base["label"], "components": feemod.validate_components(loc["components"]) if loc["components"] else base["components"],
+                    "overrides": feemod.validate_overrides(loc["overrides"]), "status": "DRAFT_UNVERIFIED",
+                    "source": "berkas " + saved[0][:80] + " (dibaca otomatis tanpa AI; periksa lalu verifikasi di Biaya platform)", "updatedAt": now()}
+        except Exception:
+            return None
+        self._set_setting("fees:" + marketplace, json.dumps(prof, ensure_ascii=False))
+        prof["customized"] = True
+        return prof
 
     def set_fee_profile(self, marketplace: str, components: list, overrides: Optional[list] = None, verified: bool = False,
                         source: str = "", ai_researched: bool = False, file_info: Optional[dict] = None) -> dict:
@@ -1815,8 +1885,11 @@ class CandraService:
         return self.get_fee_profile(marketplace)
 
     def reset_fee_profile(self, marketplace: str) -> dict:
-        self.get_fee_profile(marketplace)
-        self.db.execute("DELETE FROM app_settings WHERE key=?", ("fees:" + marketplace,))
+        self.db.execute("DELETE FROM app_settings WHERE key IN (?,?)", ("fees:" + marketplace, "feefile:" + marketplace))
+        try:
+            os.remove(self._fee_file_path(marketplace))
+        except OSError:
+            pass
         return self.get_fee_profile(marketplace)
 
     def fee_breakdown(self, marketplace: str, price: float, cost: float = 0, category: str = "", extra_cost: float = 0) -> dict:
@@ -2009,7 +2082,7 @@ class CandraService:
         """Teks kategori untuk mencari tarif komisi: kategori tarif yang dipilih Gemini untuk produk ini; bila belum ada, kategori sumber + judul."""
         if marketplace:
             r = self.db.one("SELECT label FROM product_fee_category WHERE product_id=? AND marketplace=?", (p["id"], marketplace))
-            if r:
+            if r and r["label"]:
                 return r["label"]
         return f"{p['source_category_path'] or ''} {title}"
 
@@ -2062,6 +2135,9 @@ class CandraService:
             except (ValueError, TypeError) as e:
                 note = "Gemini gagal untuk sebagian produk: " + str(e)[:150]
                 break
+            for x_ in chunk:  # sudah ditanyakan ke Gemini: jangan ditanya ulang tiap tombol Hitung (kosong = pakai tarif cadangan tertinggi)
+                self.db.execute("INSERT OR IGNORE INTO product_fee_category(product_id, marketplace, label, origin, updated_at) VALUES(?,?,?,?,?)",
+                                (x_["id"], marketplace, "", "none", now()))
             for pk in picks if isinstance(picks, list) else []:
                 try:
                     pid, lab = int(pk.get("product")), pk.get("kategori")

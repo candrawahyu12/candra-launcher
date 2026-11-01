@@ -768,7 +768,7 @@ class CaptureTests(unittest.TestCase):
         import re
         for k in ("variant_headings", "price_regex", "stock_regex"):
             re.compile(r[k])
-        self.assertLessEqual(r["max_variant_combos"], 60)
+        self.assertLessEqual(r["max_variant_combos"], 300)
 
     def test_limits_and_count_parser(self):
         from candra.capture import parse_count
@@ -975,7 +975,7 @@ class AiCompareAndFeeFileTests(unittest.TestCase):
         self.assertEqual(names, ["Biaya Administrasi", "Biaya Proses Pesanan"])      # angka 7.77 tidak ada di berkas -> dibuang
         self.assertTrue(any("Karangan" in d for d in r["suggestion"]["dropped"]))
         self.assertTrue(r["suggestion"]["numbersVerified"])
-        self.assertEqual(self.svc.get_fee_profile("shopee")["customized"], False)     # belum menyimpan apa pun
+        self.assertNotEqual(self.svc.get_fee_profile("shopee")["status"], "VERIFIED_BY_USER")  # berkas dipakai otomatis, tapi belum diverifikasi pengguna
         os.environ.pop("GEMINI_API_KEY")
         r2 = self.svc.fees_from_file("shopee", "x.txt", b"8%")            # tak ada nama biaya: tidak mengarang, tampilkan isi berkas
         self.assertTrue(r2["unreadable"])
