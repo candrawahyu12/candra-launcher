@@ -116,6 +116,13 @@ bisa berubah; bila data tidak lengkap, klik ikon ekstensi → "Unduh diagnostik 
 - **Bulk Editor**: deskripsi tampil langsung (tanpa "Memuat…"), bisa diedit, dikembalikan ke asli supplier, atau diusulkan Gemini.
 - **Hapus collection** kini ikut menghapus foto olahan, berkas ekspor, dan produk milik collection itu (produk yang dipakai collection lain / sudah pernah diupload dipertahankan).
 
+## v0.19.0 — AI Optimize studio, teks asli tampil sampai dibersihkan, berkas dibaca AI
+
+- **AI Optimize** kini halaman penuh (#/optimize/<collection>): audit tanpa AI (skor, tanpa deskripsi, judul kembar) → centang produk → ✨ Buat usulan → tinjau satu per satu (3 pilihan judul dengan batas karakter, deskripsi sebelum/sesudah + perbedaan, atribut dengan bukti, kata kunci) → Terima/Tolak (pintasan A/R/S) → Terapkan. Usulan TERSIMPAN (migrasi DB v11) sehingga tidak hilang saat halaman ditutup; bisa diurungkan.
+- Pembersihan otomatis setelah grab kini MATI secara bawaan: Bulk Editor menampilkan judul & deskripsi ASLI supplier sampai Anda menekan Analisis & Bersihkan (saklar tersedia di dialog itu).
+- Pembersihan nomor telepon/link tidak lagi menyisakan kata "WA"/sambungan menggantung; tampilan berkas tarif menyebut jumlah baris tarif sebenarnya.
+- Berkas komisi: bila API key Gemini terpasang, Gemini yang membaca (aplikasi memverifikasi tiap angka/nama terhadap isi berkas + pemeriksaan silang dengan pembaca lokal); kategori Shopee dibaca lewat skema kolom dari Gemini. Tanpa key/jika gagal: pembaca lokal.
+
 ## v0.18.0 — Varian & deskripsi otomatis, tarif tersimpan, Chrome terpisah ala Qlobot
 
 - Kartu produk yang dikirim dari halaman daftar Shopee/Tokopedia otomatis diantre untuk dibuka satu per satu (semua varian + deskripsi). Batas varian naik (maks 300 kombinasi); semua varian bisa dibuka di tabel.

@@ -170,6 +170,10 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
                 self._send(500, {"error": "kesalahan internal", "detail": redact(type(e).__name__)})
 
         def route_get(self, path: str, q: dict):
+            if m := re.fullmatch(r"/api/collections/(\d+)/ai-suggestions", path):
+                return svc.ai_suggestions(int(m[1]), (q.get("marketplace") or ["shopee"])[0] if isinstance(q.get("marketplace"), list) else (q.get("marketplace") or "shopee"))
+            if path == "/api/auto-clean":
+                return svc.get_auto_clean()
             if path == "/api/health":
                 return {"ok": True, "dbVersion": svc.db.version}
             if path == "/api/update/check":
@@ -315,7 +319,7 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
                 except Exception:  # noqa: BLE001
                     raise ServiceError("berkas tidak terbaca (base64 rusak)")
                 return svc.fees_from_file(b.get("marketplace", ""), str(b.get("filename", "")), raw, b.get("text"),
-                                          str(b.get("sellerType") or "Non-Mall (Non-Star / reguler)"), use_ai=bool(b.get("useAi")),
+                                          str(b.get("sellerType") or "Non-Mall (Non-Star / reguler)"), use_ai=(None if b.get("useAi") is None else bool(b.get("useAi"))),
                                           name_col=b.get("nameCol"), pct_col=b.get("pctCol"), use_saved=bool(b.get("useSaved")))
             if m := re.fullmatch(r"/api/collections/(\d+)/set-price", path):
                 pr = b.get("price")
@@ -332,6 +336,8 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
                 return svc.bulk_stock(int(m[1]), b.get("productIds"), b.get("op", ""), b.get("value"), bool(b.get("apply")), actor="ui")
             if m := re.fullmatch(r"/api/fill/item/(\d+)/done", path):
                 return svc.fill_done(self.headers.get("X-Candra-Token"), int(m[1]), str(b.get("state", "")), str(b.get("note", "")))
+            if path == "/api/auto-clean":
+                return svc.set_auto_clean(bool(b.get("enabled")))
             if path == "/api/browser/seller-open":
                 return svc.open_seller_center(str(b.get("marketplace", "shopee")))
             if path == "/api/capture":
@@ -409,6 +415,16 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
                                          bool(b.get("clearWeight")), bool(b.get("clearPreorder")))
             if m := re.fullmatch(r"/api/collections/(\d+)/restore-cleaned", path):
                 return svc.restore_cleaned(int(m[1]), b.get("productIds"))
+            if m := re.fullmatch(r"/api/collections/(\d+)/ai-studio", path):
+                return svc.ai_studio(int(m[1]), int(b.get("productId")), goal=str(b.get("goal", "both")), style=str(b.get("style", "standar")),
+                                     marketplace=str(b.get("marketplace", "shopee")), keep=b.get("keep"), avoid=b.get("avoid"),
+                                     instruction=str(b.get("instruction", "")), shop_names=b.get("shopNames"), sections=b.get("sections"))
+            if m := re.fullmatch(r"/api/collections/(\d+)/ai-suggestion-status", path):
+                return svc.set_ai_suggestion_status(int(m[1]), int(b.get("productId")), str(b.get("marketplace", "shopee")), str(b.get("status", "")), b.get("chosen"))
+            if m := re.fullmatch(r"/api/collections/(\d+)/text-scores", path):
+                return svc.text_scores(int(m[1]), str(b.get("marketplace", "shopee")), b.get("productIds"))
+            if m := re.fullmatch(r"/api/collections/(\d+)/revert-ai-text", path):
+                return svc.revert_ai_text(int(m[1]), b.get("productIds"))
             if m := re.fullmatch(r"/api/collections/(\d+)/optimize-one", path):
                 return svc.optimize_one(int(m[1]), int(b["productId"]), b.get("shopNames") or [], int(b.get("maxTitle", 100)))
             if m := re.fullmatch(r"/api/collections/(\d+)/optimize", path):

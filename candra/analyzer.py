@@ -184,10 +184,12 @@ def clean_text(text: str, types: Iterable[str], shop_names: Iterable[str] = (), 
         if shop_hit:  # kata depan yang tertinggal setelah nama toko dibuang: "order di  ya kak" -> "order ya kak"
             body = re.sub(r"(?i)\b(?:di|dari|oleh|by|from|via)\s+(?=[,.!?;:]|$|ya\b|kak\b|kakak\b)", "", body)
             body = re.sub(r"\s{2,}", " ", body)
-        if "contact_label" in types:
+        if "contact_label" in types or "phone" in types or "url" in types:
             body = ORPHAN_LABEL.sub("", body)  # label tanpa isi ("WA:") sisa dari pembersihan lain
             if any(r["type"] in ("phone", "url", "handle") for r in removed):
                 body = re.sub(r"(?i)\b(?:wa|whatsapp|telp|tlp|hp|call)\b[\s.,;:\-]*$", "", body)
+                body = re.sub(r"(?i)\b(?:wa|whatsapp)\b\s+(?=(?:atau|dan)\b)", "", body)   # "WA atau klik" setelah nomor/link dibuang
+                body = re.sub(r"(?i)(?:\s+(?:atau|dan|via|lewat|klik|hubungi|chat|ke|di))+[\s.,;:!\-]*$", "", body)  # sisa kata sambung di ujung
         if "repeated_sentence" in types and not is_title and len(key.split()) >= 4:
             if key in seen_sentences:
                 removed.append({"type": "repeated_sentence", "text": original_body.strip()})

@@ -43,3 +43,12 @@ table{border-collapse:collapse;width:100%}th,td{padding:7px 9px;border-bottom:1p
 .rv-l{font-size:11px;letter-spacing:.05em;color:var(--mut);margin-bottom:4px;font-weight:600}.rv-t{font-weight:600}
 .rv-d{white-space:pre-wrap;font-size:12.5px;color:var(--mut);max-height:130px;overflow:auto;margin-top:4px}.rv textarea{width:100%;min-height:120px;margin-top:4px}
 tr.marked td{background:rgba(217,59,59,.12)}
+
+mark.dif{background:#d9f4e6;color:inherit;border-radius:3px;padding:0 1px}.topt{border:1px solid var(--line);border-radius:8px;padding:6px 8px;margin:4px 0;cursor:pointer}.topt:hover{border-color:#2f6bff}.topt.on{border-color:#2f6bff;background:#2f6bff14}.topt.bad{opacity:.75}
+@media(prefers-color-scheme:dark){mark.dif{background:#12372a}}
+.opt-wrap{display:grid;grid-template-columns:340px 1fr;gap:12px;align-items:start}@media(max-width:1000px){.opt-wrap{grid-template-columns:1fr}}
+.opt-tiles{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}.opt-tile{border:1px solid var(--line);border-radius:10px;padding:6px 12px;cursor:pointer;background:var(--card);min-width:96px}.opt-tile b{display:block;font-size:20px}.opt-tile.on{border-color:var(--pri);background:#2f6bff14}
+.opt-list{max-height:72vh;overflow:auto}.opt-row{display:flex;gap:8px;align-items:center;border:1px solid var(--line);border-radius:8px;padding:5px 7px;margin-bottom:5px;cursor:pointer;background:var(--card)}.opt-row.on{border-color:var(--pri);background:#2f6bff14}.opt-row img{width:38px;height:38px;object-fit:cover;border-radius:6px;flex:none}.opt-row .t{flex:1;min-width:0;font-size:12px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.opt-bar{height:6px;border-radius:4px;background:var(--line);overflow:hidden;margin:3px 0}.opt-bar i{display:block;height:100%;background:#2f6bff}.opt-bar.over i{background:#d33}
+.opt-sticky{position:sticky;bottom:0;background:var(--bg,#fff);padding:8px 0;border-top:1px solid var(--line);display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.opt-steps{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0}.opt-steps span{border:1px dashed var(--line);border-radius:8px;padding:4px 8px;font-size:12px}

@@ -303,6 +303,18 @@ MIGRATIONS = [
         PRIMARY KEY(product_id, marketplace)
     );
     """,
+    # ---- v11: usulan AI Optimize tersimpan (tidak hilang saat dialog/halaman ditutup) ----
+    """
+    CREATE TABLE ai_suggestions(
+        product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+        marketplace TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'ready',
+        chosen_json TEXT,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(product_id, marketplace)
+    );
+    """,
 ]
 
 

@@ -416,7 +416,10 @@ class V16Tests(unittest.TestCase):
         _os.environ["GEMINI_API_KEY"] = "AQ.dummy_key_for_tests_1234567890"
         try:
             g = svc.providers["gemini"]; g.min_interval = 0.0
-            g.transport = lambda u, h, b: _gem(json.dumps({"komponen": [{"name": "Komisi", "kind": "percent", "value": 8, "cap": None, "dynamic": True, "note": ""}], "overrides": [], "tanggal_data": "", "catatan": ""}))
+            g.transport = lambda u, h, b: _gem(json.dumps({"komponen": [{"name": "Komisi", "kind": "percent", "value": None, "cap": None, "dynamic": True}],
+                                                           "baris": [{"i": 1, "label": "A Meja", "tarif": [{"komponen": "Komisi", "persen": 8}]},
+                                                                     {"i": 2, "label": "B Kursi", "tarif": [{"komponen": "Komisi", "persen": 7}]},
+                                                                     {"i": 3, "label": "C Lemari", "tarif": [{"komponen": "Komisi", "persen": 6}]}]}))
             r = svc.fees_from_file("shopee", "", None, use_ai=True, use_saved=True)
         finally:
             _os.environ.pop("GEMINI_API_KEY", None)
@@ -543,3 +546,48 @@ class V18Tests(unittest.TestCase):
         cid = svc.db.one("SELECT collection_id c FROM scrape_jobs WHERE source_platform='browser_capture' ORDER BY id DESC")["c"]
         self.assertIn("Toko Oxide Jaya", svc._shop_names(cid))
         self.assertEqual(svc.fees_from_file.__name__, "fees_from_file")
+
+
+class V18StudioPersistTests(unittest.TestCase):
+    def test_ai_studio_suggestion_is_saved_and_status_roundtrips(self):
+        import os as _os
+        svc = make_svc()
+        det = dict(DETAIL, shop_name="Toko Oxide Jaya")
+        svc.capture_products([det], svc.capture_token)
+        cid = svc.db.one("SELECT collection_id c FROM scrape_jobs WHERE source_platform='browser_capture' ORDER BY id DESC")["c"]
+        pid = svc._products_in(cid)[0]["id"]
+        reply = json.dumps({"title_options": [{"strategy": "kata_kunci", "text": "Oxide Semprotan 2 liter"}], "description": "Bahan plastik tebal.",
+                            "attributes": [], "keywords": ["Semprotan"], "notes": ""})
+        _os.environ["GEMINI_API_KEY"] = "AQ.dummy_key_for_tests_1234567890"
+        try:
+            g = svc.providers["gemini"]; g.min_interval = 0.0
+            g.transport = lambda u, h, b: _gem(reply)
+            r = svc.ai_studio(cid, pid, marketplace="shopee")
+        finally:
+            _os.environ.pop("GEMINI_API_KEY", None)
+        self.assertTrue(r["titleOptions"])
+        saved = svc.ai_suggestions(cid, "shopee")["items"][str(pid)]
+        self.assertEqual(saved["status"], "ready"); self.assertEqual(saved["payload"]["titleOptions"][0]["text"], "Oxide Semprotan 2 liter")
+        svc.set_ai_suggestion_status(cid, pid, "shopee", "accepted", {"title": "Judul pilihan"})
+        saved = svc.ai_suggestions(cid, "shopee")["items"][str(pid)]
+        self.assertEqual((saved["status"], saved["chosen"]["title"]), ("accepted", "Judul pilihan"))
+        with self.assertRaises(ServiceError):
+            svc.set_ai_suggestion_status(cid, pid, "shopee", "bogus")
+
+    def test_auto_clean_is_off_by_default_so_original_text_is_shown(self):
+        svc = make_svc(); svc.auto_clean_enabled = None
+        svc.capture_products([dict(DETAIL, shop_name="Toko Oxide Jaya")], svc.capture_token)
+        cid = svc.db.one("SELECT collection_id c FROM scrape_jobs WHERE source_platform='browser_capture' ORDER BY id DESC")["c"]
+        self.assertIsNone(svc.auto_clean_collection(cid))
+        p = svc._products_in(cid)[0]
+        self.assertIsNone(p["description_edited"]); self.assertIn("Selamat datang di toko kami", svc._eff(p)[1])
+        svc.set_auto_clean(True)
+        self.assertTrue(svc.auto_clean_collection(cid)["changed"] >= 0)
+
+
+class V19CleanResidueTests(unittest.TestCase):
+    def test_phone_removal_leaves_no_dangling_wa(self):
+        r = an.clean_text("Ukuran 120x60x75 cm. WA 08123456789", ["phone", "promo", "welcome"])[0]
+        self.assertEqual(r, "Ukuran 120x60x75 cm.")
+        r2 = an.clean_text("Bahan katun halus. Order via WA 08123456789", ["phone", "url", "promo"])[0]
+        self.assertEqual(r2, "Bahan katun halus.")

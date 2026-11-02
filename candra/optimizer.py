@@ -59,7 +59,7 @@ class GeminiProvider(AIProvider):
     """Google Gemini lewat REST. Kunci API HANYA dibaca dari environment (GEMINI_API_KEY) - tidak pernah disimpan di DB,
     tidak pernah dikirim ke UI, dan dikirim lewat header (bukan URL) supaya tidak masuk log."""
     name = "gemini"
-    ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    ENDPOINT = os.environ.get("CANDRA_GEMINI_ENDPOINT") or "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
     def __init__(self, model: Optional[str] = None, transport: Optional[Callable[[str, dict, dict], dict]] = None,
                  timeout: float = 45.0, min_interval: Optional[float] = None, sleep: Callable[[float], None] = time.sleep):
@@ -68,7 +68,7 @@ class GeminiProvider(AIProvider):
         self.timeout = timeout
         self.sleep = sleep
         # jeda minimal antar panggilan (kuota gratis ketat per menit); tes memakai transport palsu -> tanpa jeda
-        self.min_interval = (4.0 if transport is None else 0.0) if min_interval is None else min_interval
+        self.min_interval = (float(os.environ.get("CANDRA_GEMINI_MIN_INTERVAL", "4.0")) if transport is None else 0.0) if min_interval is None else min_interval
         self._last = 0.0
         self._quota_block_until = 0.0
         self._quota_block_msg = ""
@@ -77,7 +77,7 @@ class GeminiProvider(AIProvider):
     def key_configured() -> bool:
         return bool(os.environ.get("GEMINI_API_KEY", "").strip())
 
-    LIST_URL = "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200"
+    LIST_URL = os.environ.get("CANDRA_GEMINI_LIST_URL") or "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200"
 
     def _http(self, url: str, headers: dict, body: Optional[dict]) -> dict:
         data = None if body is None else json.dumps(body).encode("utf-8")

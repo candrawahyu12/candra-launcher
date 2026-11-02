@@ -22,7 +22,7 @@ from .optimizer import AIProvider, GeminiProvider, gemini_search, RuleBasedProvi
 from .pricing import PriceRule, PricingError, compute_price, decorate_title, simulate
 from .uploader import (OK_RIGHTS, AssistedFillConnector, ExportFileConnector, OfficialApiConnector, SandboxConnector, UploadError, UploadManager,
                        build_payload, _validate_config)
-from . import feetable, filetext
+from . import attributes, feeai, feetable, filetext, studio
 from . import images as imgmod
 from . import capture as capmod
 from . import fees as feemod
@@ -450,7 +450,10 @@ class CandraService:
 
     def auto_clean_collection(self, collection_id: int) -> Optional[dict]:
         """Hanya produk yang belum pernah Anda edit (judul/deskripsi edit manual tidak disentuh)."""
-        if not getattr(self, "auto_clean_enabled", True):
+        en = getattr(self, "auto_clean_enabled", None)
+        if en is None:  # bawaan MATI: sebelum Anda menekan Analisis & Bersihkan, yang tampil di mana-mana adalah teks asli supplier
+            en = self._setting("auto_clean") == "1"
+        if not en:
             return None
         try:
             r = self.clean_products(collection_id, list(CLEANABLE), actor="auto-clean", auto_brands=True, only_unedited=True)
@@ -561,6 +564,123 @@ class CandraService:
             after = {"title": r["rejected"]["title"], "description": r["rejected"]["description"]}
         return {"id": p["id"], "provider": self.provider.name, "errors": r["errors"], "before": {"title": t, "description": d},
                 "after": after, "similarity": {"title": similarity(t, after["title"]), "description": similarity(d, after["description"])}}
+
+    # ------------------------------------------------------------ AI Studio (optimasi profesional, anti-karangan)
+    def text_scores(self, collection_id: int, marketplace: str = "shopee", product_ids: Optional[list[int]] = None) -> dict:
+        """Skor kualitas listing lokal (tanpa AI) per produk + apakah sudah pernah dioptimasi AI Studio."""
+        mt = studio.TITLE_LIMITS.get(marketplace, 100)
+        items = []
+        for p in self._products_in(collection_id, product_ids)[:500]:
+            t, d = self._eff(p)
+            sc = studio.score(t, d, mt)
+            last = self.db.one("SELECT rules_version FROM product_edits WHERE product_id=? AND field='title' ORDER BY id DESC LIMIT 1", (p["id"],))
+            items.append({"id": p["id"], "title": t, "score": sc["score"], "checks": sc["checks"],
+                          "optimized": bool(last and str(last["rules_version"] or "").startswith("studio")),
+                          "hasDescription": bool(d.strip()), "descLen": len(d),
+                          "descSource": ("edited" if p["description_edited"] is not None else "original") if d.strip() else "none",
+                          "thumb": (self.db.one("SELECT source_url u FROM product_images WHERE product_id=? ORDER BY sort_order LIMIT 1", (p["id"],)) or {}).get("u"),
+                          "variantCount": self.db.one("SELECT COUNT(*) n FROM product_variants WHERE product_id=?", (p["id"],))["n"]})
+        dups = studio.near_duplicates([(i["id"], i["title"]) for i in items])
+        for i in items:
+            i["dupWith"] = dups.get(i["id"], [])[:5]
+        n = max(1, len(items))
+        summary = {"total": len(items), "avgScore": round(sum(i["score"] for i in items) / n), "noDescription": sum(1 for i in items if not i["hasDescription"]),
+                   "lowScore": sum(1 for i in items if i["score"] < 70), "duplicateTitles": sum(1 for i in items if i["dupWith"]),
+                   "optimized": sum(1 for i in items if i["optimized"])}
+        return {"marketplace": marketplace, "titleLimit": mt, "items": items, "summary": summary}
+
+    def ai_studio(self, collection_id: int, product_id: int, *, goal: str = "both", style: str = "standar", marketplace: str = "shopee",
+                  keep: Optional[list[str]] = None, avoid: Optional[list[str]] = None, instruction: str = "",
+                  shop_names: Optional[list[str]] = None, sections: Optional[list[str]] = None) -> dict:
+        """Satu produk per panggilan. Gemini menyusun 3 opsi judul, deskripsi terstruktur, atribut (dengan bukti) & kata kunci HANYA dari data
+        produk; semuanya diverifikasi ulang di sini. Tidak mengubah apa pun: hanya usulan."""
+        if goal not in ("both", "title", "description") or style not in studio.STYLES:
+            raise ServiceError("tujuan/gaya tidak valid")
+        rows = self._products_in(collection_id, [product_id])
+        if not rows:
+            raise ServiceError("produk tidak ada di collection ini")
+        if not GeminiProvider.key_configured():
+            raise ServiceError("AI Studio memakai Gemini: pasang API key di Settings terlebih dulu (GEMINI_API_KEY).")
+        p = rows[0]
+        t, d = self._eff(p)
+        orig_d = p["description_original"] or ""
+        vrows = self.db.query("SELECT option_values_json, price_original FROM product_variants WHERE product_id=? ORDER BY id LIMIT 200", (p["id"],))
+        opts: dict[str, list] = {}
+        for v in vrows:
+            try:
+                for k, val in json.loads(v["option_values_json"] or "{}").items():
+                    if val not in opts.setdefault(k, []):
+                        opts[k].append(val)
+            except (ValueError, AttributeError):
+                pass
+        pc = self.db.one("SELECT label FROM product_categories WHERE product_id=? AND marketplace=?", (p["id"], marketplace))
+        cat = (pc["label"] if pc else "") or p["source_category_path"] or ""
+        attrs = attributes.extract(t, d or orig_d, [v["option_values_json"] for v in vrows])
+        max_t = studio.TITLE_LIMITS.get(marketplace, 100)
+        data = {"judul_saat_ini": t, "deskripsi_saat_ini": d[:3500], "deskripsi_asli_supplier": orig_d[:3500] if orig_d != d else "",
+                "kategori": cat, "pilihan_varian": {k: v[:40] for k, v in list(opts.items())[:4]}, "atribut_terdeteksi_lokal": attrs}
+        names = self._shop_names(collection_id, shop_names)
+        keep, avoid = [str(x).strip()[:30] for x in (keep or []) if str(x).strip()][:10], [str(x).strip()[:30] for x in (avoid or []) if str(x).strip()][:10]
+        prompt = studio.build_prompt(data, goal=goal, style=style, max_title=max_t, keep=keep, avoid=avoid, instruction=str(instruction or ""),
+                                     sections=[x for x in (sections or []) if x in studio.SECTIONS] or None)
+        try:
+            obj = studio.parse(self.providers["gemini"].complete(prompt))
+        except (ValueError, TypeError) as e:
+            raise ServiceError("Gemini tidak memberi hasil yang bisa dipakai: " + str(e)[:200])
+        src = studio.source_text(t, d, orig_d, opts, cat)
+        res = studio.verify(obj, title=t, description=d, source=src, max_title=max_t, max_desc=3000, shop_names=names, avoid=avoid)
+        if goal == "title":
+            res["description"], res["descErrors"] = "", []
+        if goal == "description":
+            res["titleOptions"] = []
+        out = {"id": p["id"], "marketplace": marketplace, "titleLimit": max_t, "before": {"title": t, "description": d, "descriptionOriginal": orig_d},
+               "scoreBefore": studio.score(t, d, max_t), **res}
+        self.db.execute("INSERT INTO ai_suggestions(product_id, marketplace, payload_json, status, chosen_json, updated_at) VALUES(?,?,?,'ready',NULL,?)"
+                        " ON CONFLICT(product_id, marketplace) DO UPDATE SET payload_json=excluded.payload_json, status='ready', chosen_json=NULL,"
+                        " updated_at=excluded.updated_at", (p["id"], marketplace, json.dumps(out, ensure_ascii=False), now()))
+        return out
+
+    def ai_suggestions(self, collection_id: int, marketplace: str = "shopee") -> dict:
+        """Usulan AI Optimize yang tersimpan per produk (supaya tidak hilang), beserta status ready/accepted/rejected/applied."""
+        ids = [p["id"] for p in self._products_in(collection_id)]
+        out: dict = {}
+        for i in range(0, len(ids), 400):
+            chunk = ids[i:i + 400]
+            for r in self.db.query("SELECT product_id, payload_json, status, chosen_json FROM ai_suggestions WHERE marketplace=? AND product_id IN (%s)"
+                                   % ",".join("?" * len(chunk)), [marketplace] + chunk):
+                try:
+                    out[str(r["product_id"])] = {"status": r["status"], "payload": json.loads(r["payload_json"]),
+                                                 "chosen": json.loads(r["chosen_json"]) if r["chosen_json"] else None}
+                except (ValueError, TypeError):
+                    continue
+        return {"marketplace": marketplace, "items": out}
+
+    def set_ai_suggestion_status(self, collection_id: int, product_id: int, marketplace: str, status: str, chosen: Optional[dict] = None) -> dict:
+        if status not in ("ready", "accepted", "rejected", "applied"):
+            raise ServiceError("status tidak valid")
+        if not self._products_in(collection_id, [product_id]):
+            raise ServiceError("produk tidak ada di collection ini")
+        ch = None
+        if isinstance(chosen, dict):
+            ch = json.dumps({k: str(chosen[k])[:6000] for k in ("title", "description") if chosen.get(k) is not None}, ensure_ascii=False)
+        n = self.db.execute("UPDATE ai_suggestions SET status=?, chosen_json=COALESCE(?, chosen_json), updated_at=? WHERE product_id=? AND marketplace=?",
+                            (status, ch, now(), product_id, marketplace)).rowcount
+        return {"updated": n}
+
+    def revert_ai_text(self, collection_id: int, product_ids: Optional[list[int]] = None) -> dict:
+        """Batalkan optimasi AI Studio terakhir (hanya bila perubahan terakhir memang dari AI Studio; edit manual Anda tidak disentuh)."""
+        n = 0
+        for p in self._products_in(collection_id, product_ids):
+            for field, col in (("title", "title_edited"), ("description", "description_edited")):
+                last = self.db.one("SELECT before_value, rules_version FROM product_edits WHERE product_id=? AND field=? ORDER BY id DESC LIMIT 1", (p["id"], field))
+                if not last or not str(last["rules_version"] or "").startswith("studio") or p[col] is None:
+                    continue
+                orig = p["title_original"] if field == "title" else p["description_original"]
+                prev = last["before_value"]
+                self.db.execute(f"UPDATE products SET {col}=? WHERE id=?", (None if prev == orig or prev is None else prev, p["id"]))
+                self._record_edit(p["id"], field, p[col], prev, "revert-studio", "ui")
+                n += 1
+        return {"reverted": n}
 
     # ------------------------------------------------------------ teks: terapkan usulan terpilih & reset judul marketplace
     def apply_text_suggestions(self, collection_id: int, items: list, shop_names: Optional[list[str]] = None, max_title: int = 100,
@@ -675,7 +795,7 @@ class CandraService:
                           [(marketplace, i, p) for i, p in rows])
         return {"marketplace": marketplace, "imported": len(rows)}
 
-    def import_categories_file(self, marketplace: str, filename: str, data: bytes) -> dict:
+    def import_categories_file(self, marketplace: str, filename: str, data: bytes, use_ai: Optional[bool] = None) -> dict:
         """Impor daftar kategori dari BERKAS unduhan marketplace (.csv/.tsv/.txt/.xlsx). Format dikenali otomatis; hasil bisa dicari di
         Manage Tools. Menggantikan daftar lama marketplace itu."""
         if marketplace not in self.MARKETPLACES:
@@ -705,6 +825,22 @@ class CandraService:
             raw = info["rows"]
         cand.append(cats.parse_category_rows(raw))
         rows = max(cand, key=len)  # pakai pembaca yang menemukan kategori terbanyak
+        ai_note = ""
+        if use_ai is None:
+            use_ai = GeminiProvider.key_configured()
+        if use_ai and raw:
+            # Gemini MENUNJUK kolom ID & tingkat kategori dari contoh baris; aplikasi menerima skema itu lalu membaca seluruh baris persis dari berkas
+            try:
+                sch = json.loads((re.search(r"\{.*\}", self.providers["gemini"].complete(cats.schema_prompt(marketplace, raw)), re.S) or [""])[0] or "{}")
+                ai_rows = list(dict.fromkeys(cats.parse_with_schema(raw, sch)))
+                same = len(set(ai_rows) & set(rows))
+                if ai_rows and len(ai_rows) >= 0.9 * len(rows):
+                    ai_note = f"Gemini menunjuk kolom (ID kolom {sch['id_col'] + 1}, tingkat {[c + 1 for c in sch['level_cols']]}): {len(ai_rows)} kategori, {same} identik dengan pembacaan lokal."
+                    rows = ai_rows
+                else:
+                    ai_note = f"Skema kolom Gemini ({len(ai_rows)} baris) kalah lengkap dari pembacaan lokal ({len(rows)} baris), jadi pembacaan lokal dipakai."
+            except Exception as e:  # noqa: BLE001 - skema AI gagal -> pembacaan lokal
+                ai_note = "Gemini tidak dipakai untuk membaca kolom (" + str(e)[:100] + "); dipakai pembacaan lokal."
         preview = [[str(c)[:40] for c in r[:8]] for r in raw if any(str(c).strip() for c in r)][:8]
         if not rows:
             raise ServiceError("tidak ada baris kategori yang dikenali di berkas (butuh kolom ID kategori + nama/jalur kategori)")
@@ -717,7 +853,7 @@ class CandraService:
                           [(marketplace, i, p) for i, p in rows])
         self._set_setting("catfile:" + marketplace, json.dumps({"name": (filename or "tempel")[:100], "at": now(), "count": len(rows),
                                                               "sample": [f"{i} · {p}" for i, p in rows[:5]], "preview": preview}, ensure_ascii=False))
-        out = {"marketplace": marketplace, "imported": len(rows), "sample": [p for _, p in rows[:3]], "fileName": (filename or "")[:100]}
+        out = {"marketplace": marketplace, "imported": len(rows), "sample": [p for _, p in rows[:3]], "fileName": (filename or "")[:100], "aiNote": ai_note}
         mapped = 0
         for c in self.db.query("SELECT id FROM collections WHERE status NOT IN ('staging','deleted')"):
             try:
@@ -982,6 +1118,13 @@ class CandraService:
     def _setting(self, key: str) -> Optional[str]:
         r = self.db.one("SELECT value FROM app_settings WHERE key=?", (key,))
         return r["value"] if r else None
+
+    def get_auto_clean(self) -> dict:
+        return {"enabled": self._setting("auto_clean") == "1"}
+
+    def set_auto_clean(self, enabled: bool) -> dict:
+        self._set_setting("auto_clean", "1" if enabled else "0")
+        return self.get_auto_clean()
 
     def _set_setting(self, key: str, value: str) -> None:
         self.db.execute("INSERT INTO app_settings(key, value, updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET"
@@ -1931,11 +2074,13 @@ class CandraService:
             return json.loads(meta)["name"], f.read()
 
     def fees_from_file(self, marketplace: str, filename: str, data: Optional[bytes], text: Optional[str] = None,
-                       seller_type: str = "Non-Mall (Non-Star / reguler)", use_ai: bool = False,
+                       seller_type: str = "Non-Mall (Non-Star / reguler)", use_ai: Optional[bool] = None,
                        name_col: Optional[int] = None, pct_col: Optional[int] = None, use_saved: bool = False) -> dict:
         """Baca berkas tarif (csv/tsv/txt/xlsx/html atau teks tempel). Bawaan TANPA AI: hanya angka yang tertulis di berkas
         (rentang -> tertinggi; program opsional dimatikan). Gemini opsional (use_ai) dan wajib untuk PDF/gambar. Tidak menyimpan apa pun."""
         self.get_fee_profile(marketplace)
+        if use_ai is None:  # bawaan: Gemini yang membaca (lebih akurat); aplikasi menerima datanya & memverifikasi angka ke isi berkas
+            use_ai = GeminiProvider.key_configured() and name_col is None
         parts_extra: list = []
         body_text: Optional[str] = None
         rows: Optional[list] = None
@@ -1965,6 +2110,36 @@ class CandraService:
         warn_local, res, local_used = "", None, None
         table = (rows if rows is not None else feetable.to_rows(body_text)) if body_text is not None else None
         preview = feetable.table_preview(table) if table is not None else None
+        ai_check = None
+        if use_ai is None:  # bawaan: bila API key Gemini terpasang, GEMINI yang membaca berkas; aplikasi hanya menerima & memverifikasi datanya
+            use_ai = bool(table is not None and name_col is None and GeminiProvider.key_configured())
+        if table is not None and use_ai and GeminiProvider.key_configured():
+            # Gemini MEMBACA berkas per potongan; aplikasi menerima datanya & memverifikasi tiap angka/nama terhadap isi berkas
+            try:
+                g = self.providers["gemini"]
+                ai = feeai.read(g.complete, table, marketplace, seller_type)
+                loc0 = feetable.parse(table, seller_type)
+                ai_check = feeai.cross_check(ai, loc0)
+                ok_ai = bool(ai["components"]) and ai["failedChunks"] <= max(1, ai["chunks"] // 4) and (
+                    (ai["overrides"] and (ai_check["agree"] is None or ai_check["coverage"] >= 0.6)) or not (loc0["overrides"] if loc0 else None))
+                if ok_ai:
+                    feeai.fill_caps(ai, loc0)
+                    res = {"components": feemod.validate_components(ai["components"]), "overrides": feemod.validate_overrides(ai["overrides"]), "dataDate": "",
+                           "notes": ai["notes"] + (f" Pemeriksaan silang dengan pembacaan lokal: {ai_check['sameValue']} dari {ai_check['matchedRows']} baris sama persis"
+                                                   f" (cakupan {int(ai_check['coverage'] * 100)}%)." if ai_check["agree"] is not None else ""),
+                           "dropped": ai["dropped"], "numbersVerified": True, "method": "gemini"}
+                else:
+                    local_used = ("Gemini hanya lolos verifikasi sebagian" + (f" (cakupan {int(ai_check['coverage'] * 100)}% dari baris berkas)" if ai_check and ai_check["agree"] is not None else "")
+                                  + "; dipakai pembacaan lokal yang cocok persis dengan berkas")
+            except (ValueError, TypeError, feemod.FeeError) as e:
+                local_used = "Gemini gagal membaca: " + str(e)[:160]
+            if res is None:
+                loc = feetable.parse(table, seller_type)
+                if not (loc["components"] or loc["overrides"]):
+                    loc = feetable.parse_loose(table, seller_type)
+                if loc["components"] or loc["overrides"]:
+                    res = {"components": feemod.validate_components(loc["components"]) if loc["components"] else [], "overrides": feemod.validate_overrides(loc["overrides"]),
+                           "dataDate": "", "notes": loc["notes"], "dropped": [], "numbersVerified": True, "method": "lokal-darurat"}
         if table is not None and not use_ai:
             loc = None
             if name_col is not None and pct_col is not None:
@@ -1982,9 +2157,11 @@ class CandraService:
                 return {"marketplace": marketplace, "fileName": (filename or "teks tempel")[:80], "unreadable": True, "preview": preview,
                         "sellerType": seller_type, "method": "lokal",
                         "warning": "Aplikasi belum menemukan kolom nama biaya + persen di berkas ini. Isi berkas ditampilkan di bawah: pilih kolom NAMA dan kolom PERSEN, lalu baca ulang."}
+        if res is None and not GeminiProvider.key_configured():
+            raise ServiceError("GEMINI_API_KEY belum diatur (Settings → API key Gemini).")
+        if res is None and table is not None and use_ai and local_used is not None:
+            raise ServiceError("membaca berkas gagal: " + local_used)
         if res is None:
-            if not GeminiProvider.key_configured():
-                raise ServiceError("GEMINI_API_KEY belum diatur (Settings → API key Gemini).")
             slim = research.fee_relevant_text(body_text) if body_text is not None else None
             prompt = research.fee_file_prompt(marketplace, seller_type, slim)
             try:
