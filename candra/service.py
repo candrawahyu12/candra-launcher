@@ -138,8 +138,9 @@ class CandraService:
             except (ValueError, TypeError, KeyError):
                 partial = False
             nvar = self.db.one("SELECT COUNT(*) n FROM product_variants WHERE product_id=?", (p["id"],))["n"]
-            if (p["description_original"] or "").strip() and nvar and not partial:
-                continue    # lengkap: ada deskripsi + varian
+            same = nvar > 1 and self.db.one("SELECT COUNT(DISTINCT price_original) n FROM product_variants WHERE product_id=?", (p["id"],))["n"] <= 1
+            if (p["description_original"] or "").strip() and nvar and not partial and not same:
+                continue    # lengkap: ada deskripsi + varian dengan harga masing-masing
             u = p["source_url"] or ""
             if u.startswith("https://") and bgrab.is_browser_url(u) and JobManager.is_product_url(u) and u not in urls:
                 urls.append(u)
@@ -244,7 +245,8 @@ class CandraService:
             r["priceMin"] = min(prices) if prices else None
             d = r.pop("description") or ""
             orig = r.pop("description_original") or ""
-            r["incomplete"] = (not orig.strip()) or (not vs)
+            r["variantPriceSame"] = len(vs) > 1 and len(set(prices)) <= 1  # banyak varian tapi harga sama semua -> kemungkinan harga varian tak terbaca
+            r["incomplete"] = (not orig.strip()) or (not vs) or r["variantPriceSame"]
             r["descriptionSnippet"] = d[:160] + ("…" if len(d) > 160 else "")
             if (up_pre or up_suf):  # judul sebagaimana akan terkirim saat upload (awalan/akhiran dari Collection Settings)
                 po = (page - 1) * page_size + rows.index(r)
@@ -2286,7 +2288,7 @@ class CandraService:
             else:
                 body_text = info["text"]
                 rows = info.get("rows")
-        warn_local, res, local_used = "", None, None
+        warn_local, res, local_used, audit_failed = "", None, None, ""
         table = (rows if rows is not None else feetable.to_rows(body_text)) if body_text is not None else None
         preview = feetable.table_preview(table) if table is not None else None
         ai_check = None
@@ -2315,7 +2317,8 @@ class CandraService:
                     if ai_check["checked"] >= 4 and ai_check["same"] < ai_check["checked"]:
                         local_used = f"Gemini berbeda dengan pembacaan aplikasi pada {ai_check['checked'] - ai_check['same']} baris contoh: " + "; ".join(ai_check["different"][:3]) + " — periksa angkanya."
                 except (ValueError, TypeError, feemod.FeeError) as e:
-                    local_used = "Gemini tidak dapat memeriksa (" + aierr.one_line(str(e))[:220] + "); dipakai pembacaan aplikasi yang cocok persis dengan berkas"
+                    audit_failed = aierr.one_line(str(e))[:220]
+                    local_used = "Gemini tidak dapat memeriksa (" + audit_failed + "); dipakai pembacaan aplikasi yang cocok persis dengan berkas"
                     self.db.event("ai", 0, "warning", "AI_FEEFILE_AUDIT_FAILED", aierr.one_line(str(e))[:400])
             else:
                 try:
@@ -2384,7 +2387,8 @@ class CandraService:
             raise ServiceError("tidak ada komponen biaya yang bisa dipastikan dari berkas ini" + (": " + "; ".join(res["dropped"][:3]) if res["dropped"] else ""))
         return {"marketplace": marketplace, "fileName": (filename or "teks tempel")[:80], "suggestion": res, "sellerType": seller_type,
                 "method": res.get("method", ""), "localFallback": local_used, "preview": preview,
-                "warning": warn_local + ("Gemini gagal (" + local_used[:120] + "), jadi berkas dibaca TANPA AI dari baris yang memuat % / Rp — periksa semua angka. " if local_used else "")
+                "auditFailed": bool(audit_failed and res.get("method") == "lokal"),
+                "warning": warn_local + (("Berkas dibaca LANGSUNG oleh aplikasi dan setiap angka dicocokkan persis dengan isi berkas (akurat). Audit tambahan oleh Gemini tidak berhasil (" + audit_failed + ") — ini tidak memengaruhi angka. ") if audit_failed and res.get("method") == "lokal" else "Gemini gagal (" + local_used[:120] + "), jadi berkas dibaca TANPA AI dari baris yang memuat % / Rp — periksa semua angka. " if local_used else "")
                            + ("Angka sudah dicocokkan dengan teks berkas. " if res["numbersVerified"] else
                               "Berkas PDF/gambar tidak bisa dicocokkan otomatis: periksa setiap angka sendiri. ")
                            + ("Tetap usulan AI: cek sebelum disimpan." if res.get("method") == "gemini" else "")}

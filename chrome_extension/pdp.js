@@ -24,7 +24,8 @@
     if (!it) return null;
     const tiers = Array.isArray(it.tier_variations) ? it.tier_variations.filter(isObj) : [];
     const models = it.models.filter(isObj);
-    const k = scaleAll([...models.map(m => num(m.price)), num(it.price), num(it.price_min)]);
+    const mp = m => { for (const v of [m.price, m.price_info && m.price_info.price, m.promotion_price, m.price_min, m.item_price, m.current_price]) if (num(v) > 0) return num(v); return 0; };
+    const k = scaleAll([...models.map(mp), num(it.price), num(it.price_min)]);
     const variants = [];
     for (const m of models) {
       let idx = m.extinfo && Array.isArray(m.extinfo.tier_index) ? m.extinfo.tier_index : (Array.isArray(m.tier_index) ? m.tier_index : null);
@@ -43,7 +44,7 @@
         parts.forEach((x, i) => { options[tiers[i] && tiers[i].name ? String(tiers[i].name) : (parts.length > 1 ? "Varian " + (i + 1) : "Varian")] = x; });
       }
       if (!Object.keys(options).length) continue;
-      const price = num(m.price) / k;
+      const price = mp(m) / k;
       const stock = m.stock != null ? num(m.stock) : (m.normal_stock != null ? num(m.normal_stock) : "");
       variants.push({ options, price: price ? Math.round(price) : "", stock, image });
     }

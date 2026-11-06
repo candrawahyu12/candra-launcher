@@ -128,6 +128,24 @@
     d._api = true;
     return d;
   }
+  // Harga per varian dari tampilan halaman: dipakai bila data API tidak membawa harga per varian (kosong / sama semua padahal varian banyak).
+  async function fixVariantPrices(d, st) {
+    const vs = d.variants || [];
+    if (vs.length < 2 || st.deepVariants === false || !Object.keys(variantGroups()).length) return;
+    const ps = vs.map(v => Number(String(v.price || "").replace(/[^\d]/g, "")) || 0);
+    if (ps.every(x => x > 0) && new Set(ps).size > 1) return;  // sudah beda-beda: percaya API
+    setNote("membaca harga tiap varian dari halaman...");
+    let dv = [];
+    try { dv = await deepVariants(); } catch (e) { return; }
+    const key = o => Object.values(o || {}).map(x => String(x).trim().toLowerCase()).sort().join("|");
+    const byKey = new Map(dv.map(x => [key(x.options), x]));
+    let changed = 0;
+    for (const v of vs) {
+      const m = byKey.get(key(v.options));
+      if (m && Number(String(m.price).replace(/[^\d]/g, "")) > 0) { v.price = m.price; changed++; }
+    }
+    if (!changed && dv.length >= vs.length) d.variants = dv.map((x, i) => ({ ...x, image: x.image || (vs[i] && vs[i].image) || "" }));
+  }
   async function deepVariants() {
     const els = variantEls();
     const keys = Object.keys(els);
@@ -280,6 +298,7 @@
     await waitApi(3000);
     const d = mergeApi(extractDetail());
     const st = await new Promise(res => chrome.runtime.sendMessage({ type: "settings" }, x => res((x && x.result) || {})));
+    if (d._api) await fixVariantPrices(d, st);
     if (!d._api && st.deepVariants !== false && Object.keys(variantGroups()).length) {
       setNote("membaca harga & foto tiap varian...");
       try { const dv = await deepVariants(); if (dv.length) d.variants = dv; } catch (e) { /* tetap kirim tanpa detail varian */ }
@@ -335,6 +354,7 @@
       detailBtn.disabled = true;
       const d = mergeApi(extractDetail());
       const st = await new Promise(res => chrome.runtime.sendMessage({ type: "settings" }, r => res((r && r.result) || {})));
+      if (d._api) await fixVariantPrices(d, st);
       if (!d._api && st.deepVariants !== false && Object.keys(variantGroups()).length) {
         msg.textContent = "Membaca harga & foto tiap varian...";
         try { const dv = await deepVariants(); if (dv.length) d.variants = dv; } catch (e) { /* tetap kirim tanpa detail varian */ }
