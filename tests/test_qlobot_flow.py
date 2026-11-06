@@ -324,7 +324,8 @@ class ImageAndPriceTests(unittest.TestCase):
         flags = self.svc.db.one("SELECT flags_json FROM image_assets WHERE status='REVIEW'")["flags_json"]
         self.assertIn("marketplace", flags); self.assertNotIn("0812", flags)  # hanya jenis, bukan isi teks
         pv = self.svc.preview_upload(collection_id=self.col, target="sandbox", selection={"mode": "all"}, config={})
-        self.assertIn("IMAGE_TEXT_REVIEW", pv["errorsByCode"])
+        self.assertNotIn("IMAGE_TEXT_REVIEW", pv["errorsByCode"])   # hanya peringatan, tidak memblokir
+        self.assertTrue(any("IMAGE_TEXT_REVIEW" in i["warnings"] for i in pv["items"]))
         for a in r["attention"]:
             self.svc.approve_image(a["imageId"], "sandbox")
         pv2 = self.svc.preview_upload(collection_id=self.col, target="sandbox", selection={"mode": "all"}, config={})
@@ -390,7 +391,7 @@ class ImageAndPriceTests(unittest.TestCase):
             self.assertGreater(r2["counts"].get("UNCHECKED", 0), 0)
             pv = self.svc.preview_upload(collection_id=self.col, target="sandbox", selection={"mode": "all"},
                                          config={"require_processed_images": True})
-            self.assertIn("IMAGES_UNCHECKED", pv["errorsByCode"])
+            self.assertNotIn("IMAGES_UNCHECKED", pv["errorsByCode"])   # belum dicek OCR tidak memblokir upload
         finally:
             im.ocr_available, im._tesseract = old, old2
 
@@ -803,9 +804,9 @@ class AssistedFillTests(unittest.TestCase):
     def test_requires_marketplace_and_processed_images(self):
         with self.assertRaises(Exception):
             self.svc.preview_upload(collection_id=self.col, target="assisted", selection={"mode": "all"}, config={})
-        pv = self._confirmed(process=False)
-        self.assertEqual(pv["valid"], 0)
-        self.assertIn("IMAGES_NOT_PROCESSED", pv["errorsByCode"])
+        pv = self._confirmed(process=False)   # foto diolah otomatis saat preview: tidak lagi memblokir
+        self.assertGreater(pv["valid"], 0)
+        self.assertNotIn("IMAGES_NOT_PROCESSED", pv["errorsByCode"])
 
     def test_queue_item_image_done_flow(self):
         pv = self._confirmed()

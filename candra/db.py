@@ -353,6 +353,13 @@ class DB:
             for i in range(version, len(MIGRATIONS)):
                 self.conn.executescript(MIGRATIONS[i])
                 self.conn.execute(f"PRAGMA user_version={i + 1}")
+            # Collection baru otomatis mewarisi Collection Settings terakhir yang Anda simpan (judul/deskripsi tambahan, markup, biaya platform, dll).
+            self.conn.executescript("""
+                CREATE TRIGGER IF NOT EXISTS collections_inherit_defaults AFTER INSERT ON collections
+                WHEN NEW.settings_json = '{}' AND EXISTS (SELECT 1 FROM app_settings WHERE key='collection_defaults')
+                BEGIN
+                    UPDATE collections SET settings_json = (SELECT value FROM app_settings WHERE key='collection_defaults') WHERE id = NEW.id;
+                END;""")
             self.conn.commit()
 
     @property

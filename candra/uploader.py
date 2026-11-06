@@ -299,18 +299,17 @@ def build_payload(db: DB, product_id: int, target: str, cfg: dict, index: int = 
     if not images:
         errors.append("NO_IMAGE")
     st_of = lambda i: assets.get(i["id"], {}).get("status")  # noqa: E731
+    # Foto tidak lagi memblokir upload: diolah otomatis saat preview; temuan tulisan di foto hanya PERINGATAN (tinjau bila mau).
     if any(st_of(i) == "REVIEW" for i in images):
-        errors.append("IMAGE_TEXT_REVIEW")  # SUDAH diolah, tetapi ada tulisan marketplace/supplier di foto: tinjau & setujui/kecualikan
+        warnings.append("IMAGE_TEXT_REVIEW")
     if any(st_of(i) == "TOO_SMALL" for i in images):
         warnings.append("IMAGE_TOO_SMALL")
-    if cfg.get("require_processed_images") and images:
-        # tiap keadaan punya pesan sendiri (dulu semua disebut 'belum diolah', padahal foto sudah diolah tetapi menunggu ditinjau / gagal dicek)
-        if any(st_of(i) is None for i in images):
-            errors.append("IMAGES_NOT_PROCESSED")
-        if any(st_of(i) == "ERROR" for i in images):
-            errors.append("IMAGES_FAILED")
-        if any(st_of(i) == "UNCHECKED" for i in images):
-            errors.append("IMAGES_UNCHECKED")
+    if images and target == "assisted":
+        usable = [i for i in images if assets.get(i["id"], {}).get("local_path") and st_of(i) in ("OK", "APPROVED", "REVIEW", "UNCHECKED", "TOO_SMALL")]
+        if not usable:
+            errors.append("IMAGES_FAILED")  # satu pun foto tidak berhasil diunduh/diolah (mis. tautan foto mati / tidak ada internet)
+        elif len(usable) < len(images):
+            warnings.append(f"IMAGES_PARTIAL:{len(usable)}/{len(images)}")
 
     attrs = extract_attrs(title, desc, [v["option_values_json"] for v in variants])
     missing = [a for a in (cfg.get("required_attributes") or []) if a not in attrs]
@@ -465,6 +464,12 @@ class UploadManager:
         b = self.get_batch(batch_id)
         if b["status"] not in ("DRAFT", "READY_FOR_PREVIEW", "AWAITING_CONFIRMATION"):
             raise UploadError(f"batch berstatus {b['status']} tidak bisa di-preview ulang")
+        hook = getattr(self, "before_preview", None)
+        if hook:
+            try:
+                hook(b)  # mis. olah foto otomatis; kegagalan di sini tidak boleh menggagalkan preview
+            except Exception:  # noqa: BLE001
+                pass
         self._set(batch_id, "VALIDATING")
         items = self._compute_items(b)
         ts = now()

@@ -385,7 +385,7 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
             if m := re.fullmatch(r"/api/collections/(\d+)/duplicates", path):
                 return svc.remove_duplicates(int(m[1]), bool(b.get("apply")))
             if m := re.fullmatch(r"/api/collections/(\d+)/settings", path):
-                return svc.set_collection_settings(int(m[1]), b.get("settings") or {})
+                return svc.set_collection_settings(int(m[1]), b.get("settings") or {}, bool(b.get("applyAll")))
             if m := re.fullmatch(r"/api/collections/(\d+)/settings-example", path):
                 return svc.settings_example(int(m[1]), b.get("settings"))
             if m := re.fullmatch(r"/api/collections/(\d+)/bulk-edit", path):

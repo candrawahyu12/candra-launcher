@@ -28,3 +28,36 @@ class V20Tests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class V201SettingsAndIdentityTests(unittest.TestCase):
+    def test_new_collection_inherits_last_saved_settings(self):
+        from tests.test_v13 import make_svc
+        svc = make_svc()
+        c1 = svc.db.execute("INSERT INTO collections(name, created_at) VALUES('a','2026-01-01')").lastrowid
+        svc.set_collection_settings(c1, {"title_prefix": ["NEW"], "desc_suffix": ["Terima kasih"]})
+        svc.set_collection_settings(c1, {"title_prefix": ["VERANIZZ"], "desc_suffix": ["Terima kasih"]})   # perubahan terbaru dipakai
+        c2 = svc.db.execute("INSERT INTO collections(name, created_at) VALUES('b','2026-01-02')").lastrowid
+        st = svc.get_collection_settings(c2)["settings"]
+        self.assertEqual(st["title_prefix"], ["VERANIZZ"])
+        r = svc.set_collection_settings(c1, {"title_prefix": ["X"]}, apply_all=True)
+        self.assertEqual(r["appliedToOthers"], 1)
+        self.assertEqual(svc.get_collection_settings(c2)["settings"]["title_prefix"], ["X"])
+
+    def test_ai_identity_fragments_are_verified_against_text(self):
+        from tests.test_v13 import make_svc
+        svc = make_svc()
+        text = "Kami dari Toko Berkah Jaya Surabaya melayani 24 jam. Ukuran 60x40 cm bahan kayu."
+        class G:
+            def complete(self, prompt):
+                return '[{"n":0,"potongan":["Toko Berkah Jaya Surabaya","kalimat karangan","Ukuran 60x40 cm"]}]'
+        svc.providers["gemini"] = G()
+        from candra.optimizer import GeminiProvider
+        old = GeminiProvider.key_configured
+        GeminiProvider.key_configured = staticmethod(lambda: True)
+        try:
+            found, note, done = svc._ai_find_identity([(1, text)])
+        finally:
+            GeminiProvider.key_configured = old
+        self.assertEqual(found, ["Toko Berkah Jaya Surabaya"])   # karangan & spesifikasi ditolak
+        self.assertEqual(done, 1)

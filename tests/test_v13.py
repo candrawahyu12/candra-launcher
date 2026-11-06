@@ -574,15 +574,17 @@ class V18StudioPersistTests(unittest.TestCase):
         with self.assertRaises(ServiceError):
             svc.set_ai_suggestion_status(cid, pid, "shopee", "bogus")
 
-    def test_auto_clean_is_off_by_default_so_original_text_is_shown(self):
+    def test_auto_clean_is_on_by_default_and_keeps_original(self):
         svc = make_svc(); svc.auto_clean_enabled = None
         svc.capture_products([dict(DETAIL, shop_name="Toko Oxide Jaya")], svc.capture_token)
         cid = svc.db.one("SELECT collection_id c FROM scrape_jobs WHERE source_platform='browser_capture' ORDER BY id DESC")["c"]
-        self.assertIsNone(svc.auto_clean_collection(cid))
+        self.assertTrue(svc.get_auto_clean()["enabled"])
+        svc.auto_clean_collection(cid)
         p = svc._products_in(cid)[0]
-        self.assertIsNone(p["description_edited"]); self.assertIn("Selamat datang di toko kami", svc._eff(p)[1])
-        svc.set_auto_clean(True)
-        self.assertTrue(svc.auto_clean_collection(cid)["changed"] >= 0)
+        self.assertNotIn("Selamat datang di toko kami", svc._eff(p)[1])      # dibersihkan sebelum dipakai
+        self.assertIn("Selamat datang di toko kami", p["description_original"])  # teks asli tetap tersimpan
+        svc.set_auto_clean(False)
+        self.assertFalse(svc.get_auto_clean()["enabled"])
 
 
 class V19CleanResidueTests(unittest.TestCase):

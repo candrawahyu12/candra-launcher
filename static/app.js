@@ -482,7 +482,10 @@ function analyzeDialog(id, after) {
       const pr = r.problems || {};
       const autoSet = new Set((r.autoBrands || []).map(x => x.toLowerCase()));
       const weak = (r.brandCandidates || []).filter(b => !autoSet.has(b.word.toLowerCase())).map(b => h("button", { class: "sm", title: "contoh: " + b.example, onclick: () => { addName(b.word); toast("'" + b.word + "' ikut dihapus. Klik 'Pindai ulang' untuk melihat hasilnya."); } }, b.word + " ×" + b.count));
-      out.replaceChildren(h("div", { class: "note" }, r.products + " produk · " + r.productsWithFindings + " punya temuan" + (r.productsWithFindings ? "" : " (tidak ada nomor/link/akun/sapaan toko di judul & deskripsi)")),
+      out.replaceChildren(h("div", { class: "note" }, r.products + " produk · " + r.productsWithFindings + " punya temuan" + (r.productsWithFindings ? "" : " (aturan bawaan: tidak ada nomor/link/akun/sapaan/COD di judul & deskripsi)")),
+        h("div", { class: "note gap", style: r.identityUnchecked ? "border-color:var(--warn,#c90)" : "" }, r.identityUnchecked
+          ? "⚠ Nama/identitas toko di DESKRIPSI " + r.identityUnchecked + " produk belum diperiksa Gemini" + (r.aiReady ? " — klik 🧹 'Bersihkan semua merek, identitas & ajakan' agar Gemini menunjuk & aplikasi memverifikasi lalu menghapusnya." : " — isi GEMINI_API_KEY dulu; tanpa Gemini hanya aturan bawaan (nomor, link, sapaan, nama toko yang terbaca saat grab) yang jalan.")
+          : "✅ Identitas toko di deskripsi sudah diperiksa Gemini" + ((r.identityPhrases || []).length ? " · potongan yang ikut dihapus: " + r.identityPhrases.slice(0, 6).join(" | ") : " (tidak ada yang ditemukan)") + "."),
         (r.autoBrands || []).length ? h("div", { class: "gap" }, h("div", { class: "small mut" }, "Merek yang sudah dikonfirmasi Gemini / Anda — ikut dihapus dari judul & deskripsi. Merek di Shopee/Tokopedia selalu 'Tanpa Merek'. Kata lain di judul TIDAK dihapus:"), h("div", { class: "row", style: "gap:6px;margin-top:6px" }, ...r.autoBrands.map(w => h("span", { class: "badge" }, w)))) : null,
         weak.length ? h("div", { class: "gap" }, h("div", { class: "small mut" }, "Tebakan merek (tidak dihapus kecuali Anda klik; pastikan memang merek):"), h("div", { class: "row", style: "gap:6px;margin-top:6px" }, ...weak)) : null,
         h("div", { class: "gap" }, ...checks.map(([k, c]) => h("label", { class: "chk" }, c, (CLEAN_LABEL[k]) + " (" + r.totals[k] + ")"))),
@@ -496,7 +499,7 @@ function analyzeDialog(id, after) {
     }) }, "🤖 Cari merek dengan Gemini");
     const autoCb = h("input", { type: "checkbox" }); api("/api/auto-clean").then(r => autoCb.checked = r.enabled).catch(() => { });
     autoCb.onchange = () => guard(async () => { await api("/api/auto-clean", { enabled: autoCb.checked }); toast(autoCb.checked ? "Grab berikutnya dibersihkan otomatis" : "Pembersihan otomatis dimatikan: teks asli supplier tampil sampai Anda menekan Bersihkan"); });
-    modal("Analisis & Bersihkan Data", h("div", {}, h("label", { class: "chk small", title: "Bawaan mati: sebelum Anda membersihkan, Bulk Editor menampilkan judul & deskripsi ASLI supplier" }, autoCb, " Bersihkan otomatis setiap hasil grab baru (bawaan: mati)"), shop, h("div", { class: "row gap" }, h("button", { onclick: () => guard(scan) }, "Pindai ulang"), aiBtn,
+    modal("Analisis & Bersihkan Data", h("div", {}, h("label", { class: "chk small", title: "Bawaan aktif: hasil grab dibersihkan sebelum masuk collection; teks asli supplier tetap tersimpan & bisa dipulihkan" }, autoCb, " Bersihkan otomatis setiap hasil grab baru (bawaan: aktif)"), shop, h("div", { class: "row gap" }, h("button", { onclick: () => guard(scan) }, "Pindai ulang"), aiBtn,
       h("button", { title: "Kembalikan judul & deskripsi ke teks asli supplier untuk produk yang hasil edit terakhirnya berasal dari pembersih (edit manual Anda tidak disentuh)", onclick: () => { if (confirm("Pulihkan judul & deskripsi asli untuk produk yang diubah oleh pembersih?")) guard(async () => { const r = await api("/api/collections/" + id + "/restore-cleaned", {}); toast(r.restored + " bagian dipulihkan ke teks asli"); await scan(); after(); }); } }, "↩️ Pulihkan teks asli"), h("button", { class: "pri", onclick: () => { if (confirm("Hapus SEMUA merek, nama toko, sapaan toko ('Selamat datang…'), nomor/link/akun dan ajakan dari judul & deskripsi semua produk? Teks asli tetap tersimpan.")) guard(async () => { const r = await api("/api/collections/" + id + "/clean-all", { shopNames: names() }); toast("Dibersihkan: " + (r.changed ?? 0) + " produk" + (r.brandNote ? " · " + r.brandNote : ""), !!r.brandNote); await scan(); after(); }); } }, "🧹 Bersihkan semua merek, identitas & ajakan")), h("div", { class: "gap" }), out), true);
     await scan();
   });
@@ -540,7 +543,7 @@ function settingsForm(init) {
     if (rule.mode === "percent") rule.percent = +f.percent.value || 0;
     if (rule.mode === "fixed") rule.fixed = +f.fixed.value || 0;
     if (rule.mode === "tiers") rule.tiers = split(f.tiers.value).map(l => { const m = l.match(/^(\d+)\s*-\s*(\d*)\s*:\s*([\d.]+)$/); if (!m) throw new Error("Format tingkat salah: " + l); return { min: +m[1], max: m[2] ? +m[2] : null, percent: +m[3], fixed: 0 }; });
-    const s = { price_rule: rule, title_prefix: split(f.tp.value), title_suffix: split(f.ts.value), desc_prefix: split(f.dp.value), desc_suffix: split(f.ds.value), skip_zero_stock: f.skip.checked, stock_mode: f.smode.value, require_processed_images: f.reqimg.checked };
+    const s = { price_rule: rule, title_prefix: split(f.tp.value), title_suffix: split(f.ts.value), desc_prefix: split(f.dp.value), desc_suffix: split(f.ds.value), skip_zero_stock: f.skip.checked, stock_mode: f.smode.value, require_processed_images: false };
     if (f.ship.value) s.ship_days = +f.ship.value;
     s.fixed_stock = +f.fstock.value;
     return s;
@@ -555,7 +558,6 @@ function settingsForm(init) {
     h("h3", { class: "gap" }, "Tambahan judul & deskripsi"), h("div", { class: "small mut" }, "Beberapa opsi (satu per baris) dipakai bergiliran antar produk — deterministik, bukan acak."),
     h("div", { class: "row" }, h("label", { class: "grow" }, "Awalan judul", f.tp), h("label", { class: "grow" }, "Akhiran judul", f.ts)), h("div", { class: "row gap" }, h("label", { class: "grow" }, "Awalan deskripsi", f.dp), h("label", { class: "grow" }, "Akhiran deskripsi", f.ds)),
     h("h3", { class: "gap" }, "Pengiriman & stok"), h("div", { class: "row" }, h("label", {}, "Dikirim dalam (hari)", f.ship), h("label", {}, "Stok", f.smode), h("label", { title: "Dipakai bila Stok = Stok tetap, atau stok produk tidak terbaca dari sumber" }, "Jumlah (stok tetap / cadangan)", f.fstock), h("label", { class: "chk" }, f.skip, "Lewati produk stok kosong")),
-    h("label", { class: "chk gap" }, f.reqimg, "Wajib olah gambar dulu sebelum upload"),
     h("div", { class: "small mut" }, "Merek selalu \"Tanpa Merek\" dan COD selalu nonaktif — aturan tetap, tidak bisa diubah."));
   el.get = get; return el;
 }
@@ -564,14 +566,16 @@ function settingsDialog(id, after) {
     const cur = (await api("/api/collections/" + id + "/settings")).settings;
     const form = settingsForm(cur), ex = h("div", { class: "gap" });
     const feeMk = h("select", {}, ...[["shopee", "Shopee"], ["tokopedia", "Tokopedia"], ["tiktok", "TikTok Shop"]].map(([k, l]) => h("option", { value: k }, l)));
-    modal("Collection Settings", h("div", {}, form, ex, h("div", { class: "row gap" }, h("span", { class: "grow" }),
+    const allCb = h("input", { type: "checkbox" });
+    modal("Collection Settings", h("div", {}, h("div", { class: "note" }, "Pengaturan ini TERSIMPAN terus dan otomatis dipakai collection baru. Ubah kapan saja (mis. awalan NEW → VERANIZZ): yang terbaru yang dipakai."), form, ex, h("div", { class: "row gap" }, h("span", { class: "grow" }),
       h("button", { onclick: () => guard(async () => {
         const r = await api("/api/collections/" + id + "/settings-example", { settings: form.get() });
         ex.replaceChildren(h("div", { class: "note" }, "View Example — 3 produk pertama (belum disimpan)"), ...r.examples.map(e => h("div", { class: "card gap" }, h("div", { class: "small mut" }, e.titleBefore), h("b", {}, e.titleAfter), h("div", { class: "small", style: "white-space:pre-wrap" }, e.descriptionAfter), h("div", { class: "small mut" }, e.prices.map(p => p.sku + ": " + rp(p.cost) + " → " + rp(p.price) + " (" + p.marginPct + "%)").join(" · ")))));
       }) }, "View Example"),
       h("label", {}, "Marketplace", feeMk), h("button", { onclick: () => feeDialog(feeMk.value, () => settingsDialog(id, after)) }, "📄 Biaya platform (unggah file tarif)"),
       h("button", { onclick: () => { closeModal(); priceDialog(id); } }, "💰 Harga & Kompetitor"),
-      h("button", { class: "pri", onclick: () => guard(async () => { await api("/api/collections/" + id + "/settings", { settings: form.get() }); closeModal(); toast("Pengaturan collection disimpan"); if (after) after(); }) }, "Simpan"))), true);
+      h("label", { class: "chk small" }, allCb, "Terapkan juga ke semua collection lain"),
+      h("button", { class: "pri", onclick: () => guard(async () => { const r = await api("/api/collections/" + id + "/settings", { settings: form.get(), applyAll: allCb.checked }); closeModal(); toast("Pengaturan disimpan — jadi standar untuk collection baru" + (r.appliedToOthers ? " & diterapkan ke " + r.appliedToOthers + " collection lain" : "")); if (after) after(); }) }, "Simpan"))), true);
   });
 }
 
@@ -807,15 +811,19 @@ async function pgUploader(v, arg) {
   const total = cols.find(c => c.id === U.colId).products;
   // langkah 1
   const st1 = h("div", { class: "card step" }, h("h3", {}, h("span", {}, "1"), "Collection Settings"), h("div", { class: "small mut" }, "Markup harga, tambahan judul/deskripsi, pengiriman, stok."),
-    h("div", { class: "small gap" }, (() => {
-      const pr = settings.price_rule || {}, bits = [];
-      if (pr.mode === "percent" && pr.percent) bits.push("markup " + pr.percent + "%"); else if (pr.mode === "fixed" && pr.fixed) bits.push("markup Rp" + pr.fixed); else if (pr.mode === "tiers") bits.push("markup bertingkat");
-      if (pr.fee_aware) bits.push("biaya platform otomatis"); else if (!bits.length) bits.push("harga = harga sumber (markup 0)");
-      if ((settings.title_prefix || []).length) bits.push("awalan judul: " + settings.title_prefix.join(" | ")); if ((settings.title_suffix || []).length) bits.push("akhiran judul: " + settings.title_suffix.join(" | "));
-      if ((settings.desc_prefix || []).length || (settings.desc_suffix || []).length) bits.push("tambahan deskripsi");
-      if (settings.stock_mode === "fixed") bits.push("stok tetap " + settings.fixed_stock);
-      return "Tersimpan: " + bits.join(" · ") + ". Ubah lewat tombol di bawah, lalu tekan Simpan.";
-    })()),
+    (() => {
+      const pr = settings.price_rule || {}, J = a => (a || []).join(" | ");
+      const markup = pr.mode === "percent" && pr.percent ? pr.percent + "%" : pr.mode === "fixed" && pr.fixed ? "Rp" + pr.fixed : pr.mode === "tiers" ? "bertingkat" : "0 (harga = harga sumber)";
+      const rows = [
+        ["Markup harga", markup + (pr.extra_fixed ? " + tambahan Rp" + pr.extra_fixed : "")],
+        ["Biaya platform otomatis", pr.fee_aware ? "✅ dicentang" : "❌ tidak dicentang"],
+        ["Awalan judul", J(settings.title_prefix) || "—"], ["Akhiran judul", J(settings.title_suffix) || "—"],
+        ["Awalan deskripsi", J(settings.desc_prefix) || "—"], ["Akhiran deskripsi", J(settings.desc_suffix) || "—"],
+        ["Stok", settings.stock_mode === "fixed" ? "tetap " + settings.fixed_stock : "ikut data sumber" + (settings.fixed_stock ? " (cadangan " + settings.fixed_stock + ")" : "")],
+        ["Dikirim dalam", settings.ship_days ? settings.ship_days + " hari" : "—"], ["Lewati stok kosong", settings.skip_zero_stock ? "ya" : "tidak"]];
+      return h("table", { class: "gap small" }, ...rows.map(([k, v]) => h("tr", {}, h("td", { class: "mut", style: "padding:2px 14px 2px 0;white-space:nowrap" }, k), h("td", {}, h("b", {}, v)))));
+    })(),
+    h("div", { class: "small mut" }, "Tersimpan otomatis & dipakai terus (juga oleh collection baru). Ubah lewat tombol di bawah, lalu Simpan."),
     h("div", { class: "row gap" }, h("button", { onclick: () => settingsDialog(U.colId, route) }, "Atur & View Example")));
   // langkah 2
   const mode = h("select", {}, h("option", { value: "all" }, "Semua produk"), h("option", { value: "selected" }, "Yang tercentang"), h("option", { value: "range" }, "Rentang nomor"));
