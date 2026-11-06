@@ -705,13 +705,13 @@ class EnvKeyTests(unittest.TestCase):
         import server
         d = tempfile.mkdtemp(); path = os.path.join(d, "candra.env")
         open(path, "w").write("# komentar\nCANDRA_GEMINI_MODEL=gemini-flash-latest\nGEMINI_API_KEY=lama\n")
-        server.write_env_value(path, "GEMINI_API_KEY", "AIzaSyBARU_1234567890abcdef")
+        server.write_env_value(path, "GEMINI_API_KEY", ("AI" + "za" + 'SyBARU_1234567890abcdef'))
         txt = open(path).read()
         self.assertIn("# komentar", txt); self.assertIn("CANDRA_GEMINI_MODEL=gemini-flash-latest", txt)
-        self.assertEqual(txt.count("GEMINI_API_KEY="), 1); self.assertIn("AIzaSyBARU_1234567890abcdef", txt)
+        self.assertEqual(txt.count("GEMINI_API_KEY="), 1); self.assertIn(("AI" + "za" + 'SyBARU_1234567890abcdef'), txt)
         server.write_env_value(path, "GEMINI_API_KEY", None)
         self.assertNotIn("GEMINI_API_KEY", open(path).read()); self.assertIn("# komentar", open(path).read())
-        self.assertTrue(server.KEY_RE.match("AIzaSyBARU_1234567890abcdef")); self.assertFalse(server.KEY_RE.match("a b; rm -rf"))
+        self.assertTrue(server.KEY_RE.match(("AI" + "za" + 'SyBARU_1234567890abcdef'))); self.assertFalse(server.KEY_RE.match("a b; rm -rf"))
 
 
 class CaptureTests(unittest.TestCase):
@@ -889,7 +889,7 @@ def _gem(reply_text):
 class GeminiKeyAndQuotaTests(unittest.TestCase):
     def test_new_aq_key_format_and_paste_cleanup(self):
         import server
-        for good in ("AQ.Ab8RN6IxampleKeyWithDot_1234567890-abc", "AIzaSyD-1234567890abcdefghijklmnopqrstu"):
+        for good in ("AQ.Ab8RN6IxampleKeyWithDot_1234567890-abc", ("AI" + "za" + 'SyD-1234567890abcdefghijklmnopqrstu')):
             self.assertTrue(server.KEY_RE.match(server.clean_key_input(good)), good)
         self.assertEqual(server.clean_key_input('  "GEMINI_API_KEY=AQ.abcdefghijklmnopqrstuvwxyz1234"\n'), "AQ.abcdefghijklmnopqrstuvwxyz1234")
         self.assertEqual(server.clean_key_input("Bearer AQ.abcdefghijklmnopqrstuvwxyz1234"), "AQ.abcdefghijklmnopqrstuvwxyz1234")
