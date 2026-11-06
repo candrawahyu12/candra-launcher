@@ -890,9 +890,55 @@ async function pgUploader(v, arg) {
 const ERRT = { IMAGES_NOT_PROCESSED: "Foto belum diolah", IMAGES_FAILED: "Foto gagal diunduh/diolah (ulangi)", IMAGES_UNCHECKED: "Foto sudah diolah tapi tulisannya belum dicek (Gemini gagal) — ulangi atau setujui manual", IMAGE_RIGHTS_UNVERIFIED: "Hak foto belum dinyatakan", RIGHTS_UNVERIFIED: "Hak konten belum dinyatakan", STOCK_UNKNOWN: "Stok tidak terbaca", CATEGORY_UNMAPPED: "Kategori belum terisi",
   NO_IMAGE: "Tanpa foto", IMAGE_TEXT_REVIEW: "Foto bertulisan perlu ditinjau", SUPPLIER_DATA_IN_TEXT: "Masih ada nomor/link/nama toko di teks", MISSING_TITLE: "Judul kosong", DESC_TOO_LONG: "Deskripsi terlalu panjang", ZERO_STOCK_SKIPPED: "Stok kosong (dilewati)", FEE_PROFILE_MISSING: "Profil biaya belum ada" };
 const errT = c => ERRT[String(c).split(":")[0]] || c;
+
+/* ---------- Simulator marketplace: lihat persis data yang akan masuk ---------- */
+const SIM_RULES = {  // batas umum (perkiraan; selalu cocokkan dengan Seller Center terbaru)
+  shopee: { name: "Shopee", color: "#ee4d2d", title: [20, 120], desc: [25, 3000], images: [1, 9], weightLabel: "Berat (gram)", varLabel: "Variasi" },
+  tokopedia: { name: "Tokopedia", color: "#03ac0e", title: [5, 70], desc: [20, 2000], images: [1, 5], weightLabel: "Berat (gram)", varLabel: "Varian" },
+  tiktok: { name: "TikTok Shop", color: "#fe2c55", title: [25, 255], desc: [60, 10000], images: [1, 9], weightLabel: "Berat paket (gram)", varLabel: "Varian" },
+  sandbox: { name: "Sandbox", color: "#6b7280", title: [1, 255], desc: [1, 10000], images: [1, 9], weightLabel: "Berat (gram)", varLabel: "Varian" } };
+function simDialog(pv, productId, mk, back) {
+  guard(async () => {
+    const r = await api("/api/batches/" + pv.batchId + "/item/" + productId), pl = r.payload, rule = SIM_RULES[r.marketplace] || SIM_RULES[mk] || SIM_RULES.sandbox;
+    const chk = (ok, text) => h("div", { class: ok === true ? "" : ok === false ? "" : "mut", style: "padding:2px 0;color:" + (ok === false ? "var(--bad,#e5484d)" : ok === "warn" ? "var(--warn,#d9a300)" : "inherit") }, (ok === true ? "✅ " : ok === false ? "❌ " : "⚠️ ") + text);
+    const tl = (pl.title || "").length, dl = (pl.description || "").length, ims = (pl.images || []).length, vs = pl.variants || [];
+    const noPrice = vs.filter(v => !(v.price > 0)).length, noWeight = vs.filter(v => !v.weight_gram).length, noStock = vs.filter(v => v.stock == null).length;
+    const same = vs.length > 1 && new Set(vs.map(v => v.price)).size === 1;
+    const checks = [
+      chk(tl >= rule.title[0] && tl <= rule.title[1], "Judul " + tl + " karakter (batas umum " + rule.title[0] + "–" + rule.title[1] + ")"),
+      chk(dl >= rule.desc[0] && dl <= rule.desc[1], "Deskripsi " + dl + " karakter (batas umum " + rule.desc[0] + "–" + rule.desc[1] + ")"),
+      chk(ims >= rule.images[0] && ims <= rule.images[1] ? true : ims > rule.images[1] ? "warn" : false, "Foto " + ims + " (maks umum " + rule.images[1] + ")"),
+      chk(pl.category && pl.category.id ? true : false, "Kategori: " + (pl.category && pl.category.label ? pl.category.label : "BELUM ADA")),
+      chk(noPrice === 0, vs.length + " varian · " + (noPrice ? noPrice + " varian tanpa harga" : "semua punya harga")),
+      chk(same ? "warn" : true, same ? "Semua varian harganya sama — cek apakah memang begitu" : "Harga varian sesuai masing-masing"),
+      chk(noStock === 0 ? true : "warn", noStock ? noStock + " varian stok tidak terbaca" : "Stok terisi"),
+      chk(noWeight === 0 ? true : "warn", noWeight ? noWeight + " varian tanpa berat" : "Berat terisi"),
+      chk(pl.brand === "Tanpa Merek" || /no brand/i.test(pl.brand || ""), "Merek: " + (pl.brand || "-")),
+      chk(pl.cod_enabled === false, "COD: " + (pl.cod_enabled ? "AKTIF!" : "nonaktif")),
+      chk(!/\b(?:c\.?o\.?d)\b|cash on delivery|bayar di tempat/i.test((pl.title || "") + " " + (pl.description || "")), "Tidak ada kata COD di judul/deskripsi"),
+      ...(r.errors || []).map(e => chk(false, "Galat preview: " + errT(e)))];
+    const photos = (pl.images || []).slice(0, 9).map(u => h("img", { src: u, style: "width:84px;height:84px;object-fit:cover;border-radius:6px;margin:0 6px 6px 0", referrerpolicy: "no-referrer" }));
+    const priceTxt = r.priceMin ? (r.priceMin === r.priceMax ? rp(r.priceMin) : rp(r.priceMin) + " – " + rp(r.priceMax)) : "-";
+    modal("Simulator " + rule.name + " — yang akan masuk ke form", h("div", {},
+      h("div", { class: "note" }, "Ini TAMPILAN SIMULASI dari data di CANDRA (belum dikirim ke mana pun). Batas karakter/foto adalah perkiraan umum; cocokkan dengan Seller Center terbaru."),
+      h("div", { style: "border:2px solid " + rule.color + ";border-radius:10px;padding:14px;margin-top:10px" },
+        h("div", { style: "background:" + rule.color + ";color:#fff;padding:6px 10px;border-radius:6px;margin:-14px -14px 12px;font-weight:700" }, rule.name + " Seller Center — Tambah Produk"),
+        h("div", { class: "small mut" }, "Foto produk (" + ims + ")"), h("div", { class: "row", style: "flex-wrap:wrap;margin:6px 0" }, ...photos),
+        h("div", { class: "small mut" }, "Nama produk"), h("div", { style: "font-weight:700;font-size:15px;margin-bottom:8px" }, pl.title),
+        h("div", { class: "small mut" }, "Kategori"), h("div", { style: "margin-bottom:8px" }, pl.category && pl.category.label ? pl.category.label : "— belum dipilih —"),
+        h("div", { class: "small mut" }, "Harga"), h("div", { style: "font-weight:700;margin-bottom:8px" }, priceTxt),
+        h("div", { class: "small mut" }, "Deskripsi produk"), h("div", { style: "white-space:pre-wrap;max-height:200px;overflow:auto;border:1px solid var(--line,#2a3142);border-radius:6px;padding:8px;margin-bottom:8px;font-size:13px" }, pl.description),
+        h("div", { class: "small mut" }, rule.varLabel + " (" + vs.length + ")"),
+        h("div", { style: "overflow:auto;max-height:220px;margin-bottom:8px" }, h("table", { class: "small" }, h("thead", {}, h("tr", {}, h("th", {}, "Opsi"), h("th", {}, "SKU"), h("th", {}, "Harga"), h("th", {}, "Stok"), h("th", {}, rule.weightLabel))),
+          h("tbody", {}, ...vs.map(v => h("tr", {}, h("td", {}, Object.values(v.options || {}).join(" / ") || "-"), h("td", {}, v.sku), h("td", {}, rp(v.price)), h("td", {}, v.stock == null ? "?" : v.stock), h("td", {}, v.weight_gram || "?")))))),
+        h("div", { class: "small" }, "Merek: ", h("b", {}, pl.brand || "-"), " · COD: ", h("b", {}, pl.cod_enabled ? "Aktif" : "Nonaktif"), " · Dikirim dalam: ", h("b", {}, pl.ship_days ? pl.ship_days + " hari" : "default toko"), pl.preorder && pl.preorder.enabled ? " · Pre-order " + pl.preorder.days + " hari" : "")),
+      h("h3", { class: "gap" }, "Pemeriksaan sebelum upload"), ...checks,
+      h("div", { class: "row gap" }, h("span", { class: "grow" }), h("button", { onclick: () => { closeModal(); if (back) back(); } }, "← Kembali ke preview"), h("button", { onclick: closeModal }, "Tutup"))), true);
+  });
+}
 function previewDialog(pv, isExport, redo, colId, mk) {
   const key = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2)).replace(/-/g, "");
-  modal("Preview — tinjau sebelum " + (isExport ? "export" : "upload"), h("div", {}, h("div", { class: "note" }, pv.total + " produk · " + pv.valid + " valid · " + pv.invalid + " tidak valid" + (pv.belowCost ? " · " + pv.belowCost + " di bawah modal!" : "") + ". Belum ada yang dikirim."),
+  modal("Preview — tinjau sebelum " + (isExport ? "export" : "upload"), h("div", {}, h("div", { class: "note" }, pv.total + " produk · " + pv.valid + " valid · " + pv.invalid + " tidak valid" + (pv.belowCost ? " · " + pv.belowCost + " di bawah modal!" : "") + ". Belum ada yang dikirim. Klik judul produk untuk melihat TAMPILAN seperti di marketplace."),
     (() => {  // tombol perbaikan sesuai kode galat
       const codes = Object.keys(pv.errorsByCode || {}), btns = [];
       const again = msg => { toast(msg); closeModal(); if (redo) redo(); };
@@ -904,7 +950,7 @@ function previewDialog(pv, isExport, redo, colId, mk) {
     })(),
     Object.keys(pv.errorsByCode || {}).length ? h("div", { class: "gap" }, ...Object.entries(pv.errorsByCode).map(([k, n]) => h("span", { class: "badge bad", style: "margin-right:6px", title: k }, errT(k) + " ×" + n))) : null,
     h("div", { style: "overflow:auto;max-height:340px", class: "gap" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Produk"), h("th", {}, "Modal - Harga jual"), h("th", {}, "Status"))),
-      h("tbody", {}, ...pv.items.map(i => h("tr", {}, h("td", {}, i.title), h("td", { class: "small" }, (() => { const u = [...new Set(i.prices.map(p => rp(p.cost) + " - " + rp(p.price)))]; return u[0] ? u[0] + (u.length > 1 ? "  (+" + (u.length - 1) + " varian lain, harga berbeda)" : "") : "-"; })()), h("td", {}, i.errors.length ? h("span", { class: "badge bad" }, i.errors.map(errT).join(", ")) : h("span", { class: "badge ok" }, "siap"))))))),
+      h("tbody", {}, ...pv.items.map(i => h("tr", {}, h("td", {}, h("a", { href: "#", title: "Lihat seperti di marketplace", onclick: e => { e.preventDefault(); simDialog(pv, i.productId, mk, () => previewDialog(pv, isExport, redo, colId, mk)); } }, i.title)), h("td", { class: "small" }, (() => { const u = [...new Set(i.prices.map(p => rp(p.cost) + " - " + rp(p.price)))]; return u[0] ? u[0] + (u.length > 1 ? "  (+" + (u.length - 1) + " varian lain, harga berbeda)" : "") : "-"; })()), h("td", {}, i.errors.length ? h("span", { class: "badge bad" }, i.errors.map(errT).join(", ")) : h("span", { class: "badge ok" }, "siap"))))))),
     h("div", { class: "row gap" }, h("span", { class: "grow" }), h("button", { onclick: closeModal }, "Batal"),
       h("button", { class: "pri", disabled: !pv.valid, onclick: () => guard(async () => {
         const r = await api("/api/batches/" + pv.batchId + "/confirm", { confirm: true, idempotencyKey: key, previewHash: pv.previewHash });

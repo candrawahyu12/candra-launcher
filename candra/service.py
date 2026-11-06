@@ -1250,6 +1250,21 @@ class CandraService:
         ids = json.loads(batch["selection_json"])["ids"]
         self.process_images(batch["collection_id"], mkt, ids, gemini_ocr=False)
 
+    def simulate_listing(self, batch_id: int, product_id: int) -> dict:
+        """Simulator marketplace: tampilkan persis data yang AKAN masuk ke form Seller Center untuk satu produk (dari preview), tanpa mengirim apa pun."""
+        it = self.db.one("SELECT * FROM upload_items WHERE batch_id=? AND product_id=?", (batch_id, product_id))
+        if not it:
+            raise ServiceError("item tidak ada di preview batch ini (jalankan Preview Upload lagi)")
+        pl = json.loads(it["payload_json"] or "{}")
+        local = pl.pop("processed_images", None) or []
+        pl["processedImageCount"] = len(local)
+        b = self.db.one("SELECT config_json, target_platform FROM upload_batches WHERE id=?", (batch_id,))
+        cfg = json.loads(b["config_json"] or "{}") if b else {}
+        prices = [v.get("price") for v in pl.get("variants", []) if v.get("price")]
+        return {"payload": pl, "errors": json.loads(it["validation_errors_json"] or "[]"), "marketplace": cfg.get("marketplace") or (b or {}).get("target_platform"),
+                "priceMin": min(prices) if prices else None, "priceMax": max(prices) if prices else None,
+                "status": it["status"], "sent": False}
+
     def preview_upload(self, **kw) -> dict:
         return self.uploads.create_batch(**kw)
 

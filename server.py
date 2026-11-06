@@ -238,6 +238,8 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
                 return svc.jobs.status(int(m[1]))
             if m := re.fullmatch(r"/api/jobs/(\d+)/items", path):
                 return svc.jobs.items(int(m[1]), q.get("failed") == "1")
+            if m := re.fullmatch(r"/api/batches/(\d+)/item/(\d+)", path):
+                return svc.simulate_listing(int(m[1]), int(m[2]))
             if m := re.fullmatch(r"/api/batches/(\d+)/results", path):
                 return svc.uploads.results(int(m[1]))
             if m := re.fullmatch(r"/api/events/(scrape|upload|system|ai)(?:/(\d+))?", path):

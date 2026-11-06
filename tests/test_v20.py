@@ -61,3 +61,17 @@ class V201SettingsAndIdentityTests(unittest.TestCase):
             GeminiProvider.key_configured = old
         self.assertEqual(found, ["Toko Berkah Jaya Surabaya"])   # karangan & spesifikasi ditolak
         self.assertEqual(done, 1)
+
+
+class V202SimulatorTests(unittest.TestCase):
+    def test_simulate_listing_shows_payload_without_sending(self):
+        from tests.test_v13 import make_svc, DETAIL
+        svc = make_svc()
+        svc.capture_products([DETAIL], svc.capture_token)
+        cid = svc.db.one("SELECT collection_id c FROM scrape_jobs ORDER BY id DESC")["c"]
+        pv = svc.preview_upload(collection_id=cid, target="sandbox", selection={"mode": "all"}, config={})
+        r = svc.simulate_listing(pv["batchId"], pv["items"][0]["productId"])
+        self.assertFalse(r["sent"])
+        self.assertNotIn("processed_images", r["payload"])      # path lokal tidak bocor
+        self.assertEqual(r["payload"]["brand"], "Tanpa Merek")
+        self.assertFalse(r["payload"]["cod_enabled"])
