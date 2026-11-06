@@ -14,12 +14,12 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from .analyzer import supplier_data_found
+from .analyzer import clean_text, supplier_data_found
 from .attributes import extract as extract_attrs
 from .db import DB
 from .exporter import export_csv, load_template
 from .policy import NO_BRAND, enforce
-from . import fees as feemod
+from . import feecat, fees as feemod
 from .pricing import PriceRule, PricingError, compute_price, decorate_description, decorate_title, simulate
 from .util import now, redact, sha256
 
@@ -225,7 +225,7 @@ def load_fee_profile(db: DB, marketplace: str) -> Optional[dict]:
     """Profil biaya marketplace: yang Anda simpan di Biaya Platform, atau bawaan (DRAFT_UNVERIFIED) bila belum pernah disimpan."""
     r = db.one("SELECT value FROM app_settings WHERE key=?", ("fees:" + marketplace,))
     if r and r["value"]:
-        return json.loads(r["value"])
+        return feemod.normalize_profile(json.loads(r["value"]))
     return feemod.DEFAULT_PROFILES.get(marketplace)
 
 
@@ -248,6 +248,8 @@ def build_payload(db: DB, product_id: int, target: str, cfg: dict, index: int = 
     desc = (p["description_edited"] if p["description_edited"] is not None else p["description_original"]) or ""
     if not title:
         errors.append("MISSING_TITLE")
+    title = clean_text(title, ["cod"], is_title=True)[0] or title   # COD dihapus TANPA terkecuali (marketplace: COD selalu nonaktif)
+    desc = clean_text(desc, ["cod"])[0]
     def pick(key: str) -> str:  # beberapa pilihan teks dipakai bergilir menurut urutan produk (deterministik)
         opts = cfg.get(key) or []
         if isinstance(opts, str):
@@ -296,13 +298,19 @@ def build_payload(db: DB, product_id: int, target: str, cfg: dict, index: int = 
         errors.append("IMAGE_RIGHTS_UNVERIFIED")
     if not images:
         errors.append("NO_IMAGE")
-    if any(a["status"] == "REVIEW" for a in assets.values()):
-        errors.append("IMAGE_TEXT_REVIEW")  # tulisan marketplace/supplier terdeteksi di gambar: tinjau & setujui manual
-    if any(a["status"] == "TOO_SMALL" for a in assets.values()):
+    st_of = lambda i: assets.get(i["id"], {}).get("status")  # noqa: E731
+    if any(st_of(i) == "REVIEW" for i in images):
+        errors.append("IMAGE_TEXT_REVIEW")  # SUDAH diolah, tetapi ada tulisan marketplace/supplier di foto: tinjau & setujui/kecualikan
+    if any(st_of(i) == "TOO_SMALL" for i in images):
         warnings.append("IMAGE_TOO_SMALL")
-    if cfg.get("require_processed_images") and images and any(
-            assets.get(i["id"], {}).get("status") not in ("OK", "APPROVED") for i in images):
-        errors.append("IMAGES_NOT_PROCESSED")
+    if cfg.get("require_processed_images") and images:
+        # tiap keadaan punya pesan sendiri (dulu semua disebut 'belum diolah', padahal foto sudah diolah tetapi menunggu ditinjau / gagal dicek)
+        if any(st_of(i) is None for i in images):
+            errors.append("IMAGES_NOT_PROCESSED")
+        if any(st_of(i) == "ERROR" for i in images):
+            errors.append("IMAGES_FAILED")
+        if any(st_of(i) == "UNCHECKED" for i in images):
+            errors.append("IMAGES_UNCHECKED")
 
     attrs = extract_attrs(title, desc, [v["option_values_json"] for v in variants])
     missing = [a for a in (cfg.get("required_attributes") or []) if a not in attrs]
@@ -331,8 +339,7 @@ def build_payload(db: DB, product_id: int, target: str, cfg: dict, index: int = 
                 price = int(ov["price"])  # harga manual / rekomendasi yang Anda terapkan menang atas aturan harga
                 sim = simulate(v["price_original"], price, rule.commission_pct, rule.fixed_cost)
             elif fee_prof:
-                fc = db.one("SELECT label FROM product_fee_category WHERE product_id=? AND marketplace=?", (product_id, mkt))
-                cat_text = fc["label"] if fc else " ".join(x for x in ((category or {}).get("label", ""), p["source_category_path"] or "", title) if x)
+                cat_text = feecat.info(db, p, mkt, title, fee_prof)[0]
                 r0 = PriceRule.from_dict({**rule.__dict__, "round_step": 0, "fee_aware": False})  # markup Anda = laba bersih yang diinginkan
                 markup = compute_price(v["price_original"], r0) - int(round(float(v["price_original"])))
                 price = feemod.solve_price(v["price_original"], fee_prof["components"], fee_prof.get("overrides"), cat_text, 0.0, 0,

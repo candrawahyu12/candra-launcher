@@ -25,6 +25,10 @@ _HOSTS = (("shopee.co.id", "shopee_capture"), ("tokopedia.com", "tokopedia_captu
 _SHOPEE_ID = re.compile(r"(?:-i\.|/product/)(\d+)[./](\d+)")
 
 
+ERR_TEXT = {"MISSING_TITLE": "judul produk tidak terbaca (halaman belum selesai dimuat?)", "MISSING_SOURCE_ID": "ID produk tidak ada di alamat halaman",
+            "INVALID_PRICE": "harga tidak terbaca", "NEGATIVE_STOCK": "stok negatif"}
+
+
 class CaptureError(ValueError):
     pass
 
@@ -107,6 +111,19 @@ def _price_range(v) -> tuple[Optional[float], Optional[float]]:
     return (min(nums), max(nums)) if nums else (None, None)
 
 
+def strip_title_crumb(path: Optional[str], title: str) -> Optional[str]:
+    """Remah terakhir breadcrumb Shopee/Tokopedia sering berisi NAMA PRODUK itu sendiri; bukan bagian kategori -> dibuang."""
+    if not path or ">" not in path:
+        return path
+    parts = [x.strip() for x in path.split(">") if x.strip()]
+    t = re.sub(r"[^a-z0-9]+", " ", (title or "").lower()).strip()
+    last = re.sub(r"[^a-z0-9]+", " ", parts[-1].lower()).strip()
+    if len(parts) > 1 and last and t and (last == t or t.startswith(last[:25]) and len(last) >= 25 or last.startswith(t[:25]) and len(t) >= 25
+                                          or len(last) > 45):
+        parts = parts[:-1]
+    return " > ".join(parts)[:300]
+
+
 def normalize(raw: dict) -> tuple[str, dict]:
     if not isinstance(raw, dict):
         raise CaptureError("item tidak valid")
@@ -118,7 +135,7 @@ def normalize(raw: dict) -> tuple[str, dict]:
     p["description"] = str(raw.get("description", ""))[:MAX_DESC].strip()
     p["price"], price_max = _price_range(raw.get("price"))
     p["price_before_discount"] = _price_range(raw.get("price_before_discount"))[0]
-    p["category_path"] = (str(raw.get("category", "")).strip()[:300] or None)
+    p["category_path"] = strip_title_crumb(str(raw.get("category", "")).strip()[:300] or None, p["title"])
     p["stock"] = parse_count(raw.get("stock"))
     p["sold"] = parse_count(raw.get("sold"))
     try:
@@ -202,8 +219,11 @@ def capture_items(db: DB, items: list, rights: str = "self_responsible", job_id:
         try:
             plat, p = normalize(raw)
             errors, warnings = validate_product(p)
+            if errors == ["INVALID_PRICE"]:       # harga belum terbaca: tetap disimpan (bisa dilengkapi ulang), jangan dibuang sebagai gagal
+                errors, warnings = [], warnings + ["PRICE_MISSING"]
+                p["extra"]["partial"] = True
             if errors:
-                raise CaptureError(",".join(errors))
+                raise CaptureError(", ".join(ERR_TEXT.get(e, e) for e in errors))
             if raw.get("partial"):  # kartu daftar tidak boleh menimpa data detail (varian/deskripsi) yang sudah ada
                 old = db.one("SELECT id, raw_data_json FROM products WHERE source_platform=? AND source_product_id=?", (plat, p["source_product_id"]))
                 try:

@@ -26,6 +26,10 @@ WELCOME = re.compile(r"(?i)(?:selamat\s+(?:datang|berbelanja|belanja)|welcome\s+
                      r"(?:dropship(?:per)?|reseller|agen|grosir)\s*(?:dan|&|/|,)?\s*(?:dropship(?:per)?|reseller|agen|grosir)?\s*(?:welcome|diterima|dipersilakan|dipersilahkan)|"
                      r"terima\s+(?:dropship|reseller|grosir|partai)|(?:halo|hai|hi)\s+(?:kak|bestie|sobat)|dear\s+(?:customer|buyer)|kakak\s+yang\s+baik|"
                      r"happy\s+shopping|selamat\s+bergabung|cek\s+(?:toko|etalase)\s+kami|produk\s+lain\s+(?:di|dari)\s+toko)")
+# COD (bayar di tempat): dihapus TANPA terkecuali dari judul/deskripsi; aplikasi selalu menonaktifkan COD saat upload
+COD = re.compile(r"(?i)(?<![\w])(?:(?:bisa|support|supports?|terima|tersedia|siap|ready|free|gratis|via|dengan|sistem|layanan|metode|pembayaran)\s+){0,2}"
+                 r"(?:\(\s*)?(?:c\.?o\.?d\.?|cash\s*on\s*delivery|bayar\s+di\s*tempat)(?![\w])(?:\s*\))?"
+                 r"(?:\s+(?:tersedia|available|ready|diterima|bisa|ya|nih|kak|kakak))*(?:\s*[/&+|]\s*(?=\w))?")
 BRAND_LABEL = re.compile(r"(?i)(?<![\w])(?:merk|merek|brand|nama\s+toko|toko|store|supplier|pemasok|produsen|manufacturer)\s*[:=]\s*[^\n,;|/]{1,40}")
 _TAG_HEAD = re.compile(r"^\s*([\[\(【][^\]\)】]{1,28}[\]\)】])\s*")
 _TAG_TAIL = re.compile(r"\s*([\[\(【][^\]\)】]{1,28}[\]\)】])\s*$")
@@ -52,7 +56,7 @@ MARKETPLACE_NAMES = ["shopee", "shopeepay", "tokopedia", "tiktok shop", "tiktoks
 MARKETPLACE = re.compile(r"(?i)(?<![\w])(?:" + "|".join(re.escape(n) for n in sorted(MARKETPLACE_NAMES, key=len, reverse=True)) + r")(?![\w])")
 SUPPLIER_KINDS = ("phone", "url", "email", "handle", "contact_label", "marketplace", "brand_label")  # penanda data supplier: memblokir upload
 
-CLEANABLE = ("marketplace", "phone", "url", "email", "handle", "contact_label", "promo", "welcome", "brand_label", "title_tag", "shop_name", "repeated_sentence")
+CLEANABLE = ("cod", "marketplace", "phone", "url", "email", "handle", "contact_label", "promo", "welcome", "brand_label", "title_tag", "shop_name", "repeated_sentence")
 _SENT_SPLIT = re.compile(r"([.!?]+(?=\s|$)|\n+)")
 
 
@@ -86,7 +90,7 @@ def analyze_text(text: str, shop_names: Iterable[str] = (), title_len: int = 0) 
         agg[(kind, m.strip().lower())] += 1
 
     for kind, rx in (("phone", PHONE), ("url", URL), ("email", EMAIL), ("handle", HANDLE), ("contact_label", CONTACT_LABEL),
-                     ("promo", PROMO), ("welcome", WELCOME), ("brand_label", BRAND_LABEL), ("marketplace", MARKETPLACE)):
+                     ("promo", PROMO), ("welcome", WELCOME), ("brand_label", BRAND_LABEL), ("marketplace", MARKETPLACE), ("cod", COD)):
         for m in rx.finditer(text):
             add(kind, m.group(0))
     if title_len:
@@ -173,6 +177,14 @@ def clean_text(text: str, types: Iterable[str], shop_names: Iterable[str] = (), 
                 body = PROMO.sub("", body)
             else:
                 body = _drop_clauses(body, PROMO, "promo", removed)
+        if "cod" in types and COD.search(body):
+            if is_title:
+                for m in COD.finditer(body):
+                    removed.append({"type": "cod", "text": m.group(0).strip()})
+                body = COD.sub(" ", body)
+                body = re.sub(r"(?:(?<=\s)|^)[/&+|]+(?=\s|$)|(?<=\s)[/&+|]+\s*(?=[/&+|])", " ", body)
+            else:
+                body = _drop_clauses(body, COD, "cod", removed)
         if "welcome" in types and not is_title and WELCOME.search(body):
             body = _drop_clauses(body, WELCOME, "welcome", removed)
         shop_hit = False

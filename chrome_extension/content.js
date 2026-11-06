@@ -105,6 +105,29 @@
     return m ? m[0] : "";
   }
   // Klik tiap kombinasi varian di halaman yang SEDANG DIBUKA pengguna, baca harga/stok/foto yang tampil.
+  // Data produk dari balasan yang SUDAH diminta halaman sendiri (hook.js + pdp.js): varian, harga & foto per varian, deskripsi lengkap.
+  let apiData = null;
+  window.addEventListener("message", e => {
+    if (e.source !== window || !e.data || e.data.__candra !== "pdp" || !window.CandraPdp) return;
+    const d = window.CandraPdp.parse(e.data.body, location.hostname);
+    if (d && (d.variants.length || d.description || !apiData)) apiData = d;
+  });
+  const idInUrl = id => !!id && location.href.indexOf(id) >= 0;
+  function apiFor() { return apiData && (!apiData.itemId || idInUrl(apiData.itemId) || /i\.\d+\.\d+|-i\.|\/[^/]+\/[^/?]+/.test(location.pathname)) ? apiData : null; }
+  async function waitApi(ms) { const t0 = Date.now(); while (!apiFor() && Date.now() - t0 < ms) await sleep(150); return apiFor(); }
+  function mergeApi(d) {
+    const a = apiFor();
+    if (!a) return d;
+    if (a.variants && a.variants.length) d.variants = a.variants;
+    if (a.description && a.description.length >= (d.description || "").length) d.description = a.description;
+    if (a.images && a.images.length) d.images = a.images.slice(0, 9);
+    if (a.category) d.category = a.category;
+    if (a.price) d.price = a.price;
+    for (const k of ["sold", "rating", "review_count", "shop_name"]) if (a[k] && !d[k]) d[k] = a[k];
+    if (a.title && !d.title) d.title = a.title;
+    d._api = true;
+    return d;
+  }
   async function deepVariants() {
     const els = variantEls();
     const keys = Object.keys(els);
@@ -254,9 +277,10 @@
     setNote("membaca produk...");
     await scrollThrough(4);
     window.scrollTo({ top: 0, behavior: "smooth" }); await sleep(250);
-    const d = extractDetail();
+    await waitApi(3000);
+    const d = mergeApi(extractDetail());
     const st = await new Promise(res => chrome.runtime.sendMessage({ type: "settings" }, x => res((x && x.result) || {})));
-    if (st.deepVariants !== false && Object.keys(variantGroups()).length) {
+    if (!d._api && st.deepVariants !== false && Object.keys(variantGroups()).length) {
       setNote("membaca harga & foto tiap varian...");
       try { const dv = await deepVariants(); if (dv.length) d.variants = dv; } catch (e) { /* tetap kirim tanpa detail varian */ }
     }
@@ -309,9 +333,9 @@
     detailBtn = document.createElement("button"); detailBtn.textContent = "Kirim produk ini ke CANDRA";
     detailBtn.onclick = async () => {
       detailBtn.disabled = true;
-      const d = extractDetail();
+      const d = mergeApi(extractDetail());
       const st = await new Promise(res => chrome.runtime.sendMessage({ type: "settings" }, r => res((r && r.result) || {})));
-      if (st.deepVariants !== false && Object.keys(variantGroups()).length) {
+      if (!d._api && st.deepVariants !== false && Object.keys(variantGroups()).length) {
         msg.textContent = "Membaca harga & foto tiap varian...";
         try { const dv = await deepVariants(); if (dv.length) d.variants = dv; } catch (e) { /* tetap kirim tanpa detail varian */ }
       }

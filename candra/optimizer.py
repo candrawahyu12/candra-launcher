@@ -95,8 +95,13 @@ class GeminiProvider(AIProvider):
             if key:
                 detail = detail.replace(key, "***")
             raise ValueError(f"AI_HTTP_{e.code}" + (f": {detail}" if detail else "")) from None
-        except (urllib.error.URLError, TimeoutError, OSError):
-            raise ValueError("AI_NETWORK_ERROR") from None
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            why = getattr(e, "reason", None) or e
+            detail = (type(why).__name__ + " " + str(why))[:200]
+            key = os.environ.get("GEMINI_API_KEY", "").strip()
+            if key:
+                detail = detail.replace(key, "***")
+            raise ValueError("AI_NETWORK_ERROR: " + detail) from None
 
     @staticmethod
     def _pick_model(listing: dict) -> Optional[str]:

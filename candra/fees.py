@@ -100,6 +100,44 @@ def validate_overrides(ovs) -> list[dict]:
     return out[:2500]
 
 
+def _comp_key(c: dict) -> str:
+    n = re.sub(r"[^a-z ]", " ", str(c.get("name", "")).lower())
+    n = re.sub(r"\s+", " ", n).strip()
+    if c.get("kind") == "fixed" and re.search(r"proses|pemrosesan|penanganan|handling|processing", n):
+        return "fixed:proses-pesanan"          # 'Biaya proses pesanan' = 'Proses Pesanan' = 'Biaya pemrosesan pesanan': satu biaya, hanya dihitung SEKALI
+    return str(c.get("kind")) + ":" + n
+
+
+def normalize_profile(prof: dict) -> dict:
+    """Rapikan profil biaya: (1) komponen kembar (mis. dua 'biaya proses pesanan') digabung jadi satu; (2) tarif dasar komponen per-kategori
+    = tarif TERTINGGI yang benar-benar ada di tabel (hanya cadangan bila kategori produk tak ditemukan), bukan angka karangan."""
+    if not isinstance(prof, dict) or not isinstance(prof.get("components"), list):
+        return prof
+    out, seen = [], {}
+    for c in prof["components"]:
+        k = _comp_key(c)
+        if k in seen:
+            j = seen[k]
+            keep = out[j]
+            if (not keep.get("value") and c.get("value")) or (c.get("enabled") and not keep.get("enabled") and c.get("value")):
+                out[j] = {**c, "note": (c.get("note") or "") }
+            continue
+        seen[k] = len(out)
+        out.append(dict(c))
+    ovs = prof.get("overrides") or []
+    for c in out:
+        if c.get("dynamic") and c.get("kind") == "percent":
+            vals = [o["value"] for o in ovs if (not o.get("component") or o["component"].strip().lower() == c["name"].strip().lower()) and len(o.get("keywords", [""])[0]) > 12]
+            if vals:
+                c["value"] = max(vals)
+                c["note"] = "tarif cadangan = tertinggi di tabel berkas (dipakai hanya bila kategori produk tidak ditemukan); " + "tarif sebenarnya per kategori"
+    res = dict(prof)
+    res["components"] = out
+    if prof.get("fileInfo") and prof.get("status") == "AI_RESEARCHED":
+        res["status"] = "DARI_BERKAS"
+    return res
+
+
 _OV_CACHE: dict = {}
 
 
@@ -139,6 +177,18 @@ def _effective(comps: list[dict], overrides: list[dict], category_text: str) -> 
                 c2["overridden"] = True
         res.append(c2)
     return res
+
+
+def match_info(comps: list[dict], overrides: Optional[list[dict]], category_text: str) -> list[dict]:
+    """Untuk tiap komponen persen per-kategori: tarif yang dipakai & baris berkas yang cocok (None = kategori tidak ditemukan -> tarif cadangan)."""
+    out = []
+    text = (category_text or "").lower()
+    for c in comps:
+        if not c.get("enabled") or not c.get("dynamic") or c.get("kind") != "percent":
+            continue
+        ov = _best_override(overrides or [], text, c["name"])
+        out.append({"name": c["name"], "rate": ov["value"] if ov else c["value"], "matched": ov["keywords"][0] if ov else None})
+    return out
 
 
 def compute_fees(price, comps: list[dict], overrides: Optional[list[dict]] = None, category_text: str = "") -> dict:

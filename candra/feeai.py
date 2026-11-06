@@ -190,3 +190,28 @@ def fill_caps(ai: dict, local: Optional[dict]) -> None:
                 if lc.get("cap") and words(c["name"]) & words(lc["name"]) - {"komisi", "tarif", "reguler"}:
                     c["cap"] = lc["cap"]
                     break
+
+
+def sample_rows(rows: list[list[str]], head: int = 22, n: int = 22) -> list[list[str]]:
+    """Kepala tabel (judul & ringkasan komponen) + baris contoh yang tersebar rata: cukup satu panggilan Gemini (bukan 6-7 panggilan berurutan)."""
+    live = [r for r in rows if any(str(c).strip() for c in r)]
+    if len(live) <= head + n:
+        return live
+    body = live[head:]
+    step = max(1, len(body) // n)
+    return live[:head] + body[::step][:n]
+
+
+def audit_compare(ai: dict, local: dict) -> dict:
+    """Bandingkan baris yang DIBACA Gemini dengan pembacaan penuh aplikasi untuk baris yang sama (nama kategori sama). Tidak mengubah hasil."""
+    norm = lambda o: re.sub(r"[^a-z0-9]", "", o["keywords"][0].lower())  # noqa: E731
+
+    def group(ovs):
+        g: dict[str, list[float]] = {}
+        for o in ovs:
+            g.setdefault(norm(o), []).append(round(float(o["value"]), 6))
+        return {k: tuple(sorted(v)) for k, v in g.items()}
+    a, l = group(ai.get("overrides") or []), group(local.get("overrides") or [])
+    both = [k for k in a if k in l]
+    diff = [k for k in both if a[k] != l[k]]
+    return {"aiRows": len(a), "checked": len(both), "same": len(both) - len(diff), "different": diff[:6]}

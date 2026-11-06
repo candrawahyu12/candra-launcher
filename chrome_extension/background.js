@@ -102,7 +102,12 @@ async function runQueue() {
       if (!SUPPORTED.test(next.url)) { await call("/api/grab/item/" + next.id + "/done", { state: "failed", note: "URL tidak didukung ekstensi" }); continue; }
       await setStatus({ running: true, url: next.url, note: "membuka halaman", job: next.jobId });
       let out;
-      try { out = await processItem(next); } catch (e) { out = { state: "failed", note: String(e.message || e) }; }
+      for (let attempt = 1; attempt <= 3; attempt++) {  // gagal baca (halaman lambat/terputus) -> coba lagi sampai 3x sebelum dilaporkan gagal
+        try { out = await processItem(next); } catch (e) { out = { state: "failed", note: String(e.message || e) }; }
+        if (out.state !== "failed" || stopFlag) break;
+        await setStatus({ running: true, url: next.url, note: "gagal (" + (out.note || "") + "), mencoba lagi " + attempt + "/2", job: next.jobId });
+        await sleepMs(2500 * attempt);
+      }
       await call("/api/grab/item/" + next.id + "/done", { state: out.state, note: out.note || "", cards: out.cards || [] });
       did++;
       if (out.state === "needs_human") break;  // berhenti sampai Anda menekan Lanjutkan

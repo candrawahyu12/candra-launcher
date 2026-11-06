@@ -186,6 +186,10 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
                 return svc.search_categories(q.get("marketplace", ""), q.get("q", ""), int(q.get("limit", 20)))
             if path == "/api/fees/profile":
                 return svc.get_fee_profile(q.get("marketplace", ""))
+            if path == "/api/describe/progress":
+                return getattr(svc, "desc_progress", None) or {"running": False}
+            if path == "/api/categories/progress":
+                return svc.category_progress()
             if path == "/api/images/progress":
                 return dict(svc.image_progress or {"running": False})
             if path == "/api/images/status":
@@ -236,7 +240,7 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
                 return svc.jobs.items(int(m[1]), q.get("failed") == "1")
             if m := re.fullmatch(r"/api/batches/(\d+)/results", path):
                 return svc.uploads.results(int(m[1]))
-            if m := re.fullmatch(r"/api/events/(scrape|upload|system)(?:/(\d+))?", path):
+            if m := re.fullmatch(r"/api/events/(scrape|upload|system|ai)(?:/(\d+))?", path):
                 return svc.events(m[1], int(m[2]) if m[2] else None, int(q.get("limit", 100)),
                                   int(q["after"]) if q.get("after") else None, q.get("asc") == "1")
             raise ServiceError("rute tidak ditemukan")
@@ -268,6 +272,10 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
                 r = updater.rollback()
                 schedule_restart()
                 return r
+            if m := re.fullmatch(r"/api/collections/(\d+)/describe-from-images", path):
+                return svc.start_describe_from_images(int(m[1]), b.get("productIds"))
+            if m := re.fullmatch(r"/api/collections/(\d+)/auto-categories-start", path):
+                return svc.start_category_job(int(m[1]), b.get("marketplace", ""), b.get("useAi", True) is not False)
             if m := re.fullmatch(r"/api/collections/(\d+)/auto-categories", path):
                 return svc.auto_map_categories(int(m[1]), b.get("marketplace", ""), bool(b.get("useAi")), b.get("apply") is True,
                                                b.get("onlyUnmapped", True) is not False, b.get("productIds"))

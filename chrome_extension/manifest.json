@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CANDRA Capture",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Kirim data produk yang tampil di halaman yang Anda buka sendiri ke aplikasi CANDRA di komputer Anda.",
   "permissions": [
     "storage",
@@ -29,6 +29,20 @@
         "https://*.tokopedia.com/*"
       ],
       "js": [
+        "hook.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://shopee.co.id/*",
+        "https://*.shopee.co.id/*",
+        "https://www.tokopedia.com/*",
+        "https://*.tokopedia.com/*"
+      ],
+      "js": [
+        "pdp.js",
         "content.js"
       ],
       "run_at": "document_idle"

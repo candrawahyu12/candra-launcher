@@ -390,7 +390,7 @@ class ImageAndPriceTests(unittest.TestCase):
             self.assertGreater(r2["counts"].get("UNCHECKED", 0), 0)
             pv = self.svc.preview_upload(collection_id=self.col, target="sandbox", selection={"mode": "all"},
                                          config={"require_processed_images": True})
-            self.assertIn("IMAGES_NOT_PROCESSED", pv["errorsByCode"])
+            self.assertIn("IMAGES_UNCHECKED", pv["errorsByCode"])
         finally:
             im.ocr_available, im._tesseract = old, old2
 
