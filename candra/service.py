@@ -261,7 +261,7 @@ class CandraService:
         if not p:
             raise ServiceError("produk tidak ditemukan")
         p.pop("raw_data_json", None)
-        p["variants"] = self.db.query("SELECT * FROM product_variants WHERE product_id=?", (product_id,))
+        p["variants"] = self.db.query("SELECT * FROM product_variants WHERE product_id=? ORDER BY id", (product_id,))
         p["images"] = self.db.query("SELECT source_url, rights_status, sort_order FROM product_images WHERE product_id=?"
                                     " ORDER BY sort_order", (product_id,))
         p["edits"] = self.db.query("SELECT field, before_value, after_value, rules_version, actor, created_at FROM product_edits"

@@ -85,6 +85,26 @@
     for (const k of keys) out = out.flatMap(o => groups[k].map(v => ({ ...o, [k]: v })));
     return out.slice(0, 100).map(options => ({ options }));
   }
+  // Foto produk HANYA dari galeri produk (kolom foto utama + deretan thumbnail), berurutan seperti di halaman; bukan foto "produk serupa", ulasan, atau iklan.
+  function imgKey(u) { return String(u).split("?")[0].replace(/_tn$/, "").replace(/@[^/]*$/, "").replace(/\/\d+-\d+\//, "/"); }
+  function galleryImages(ld) {
+    const out = [], seen = new Set();
+    const add = u => { if (!u || !/^https?:/.test(u)) return; const k = imgKey(u); if (seen.has(k)) return; seen.add(k); out.push(u); };
+    for (const i of [].concat((ld && ld.image) || [])) add(typeof i === "string" ? i : i && i.url);
+    const hint = rx("image_url_hint") || /susercontent|tokopedia|tiktok|image/;
+    const imgsAll = [...document.querySelectorAll("img")].filter(i => !i.closest("#candra-panel") && hint.test(i.currentSrc || i.src || ""));
+    let main = null, area = 0;
+    for (const i of imgsAll) { const r = i.getBoundingClientRect(); const a = r.width * r.height; if (r.top < innerHeight * 0.9 && a > area && i.naturalWidth >= 250) { area = a; main = i; } }
+    if (main) {
+      const r = main.getBoundingClientRect();
+      const inGallery = i => { const q = i.getBoundingClientRect(); return q.width >= 36 && q.height >= 36 && q.left >= r.left - 130 && q.right <= r.right + 40 && q.top >= r.top - 30 && q.top <= r.bottom + 170; };
+      for (const i of imgsAll) if (inGallery(i)) add(bigImage(i.currentSrc || i.src));
+    } else if (!out.length) {
+      if (meta("og:image")) add(meta("og:image"));
+    }
+    if (!out.length && meta("og:image")) add(meta("og:image"));
+    return out;
+  }
   function mainImage() {
     // foto terbesar di area atas halaman (galeri), bukan thumbnail/ikon
     const hint = rx("image_url_hint") || /image/;
@@ -211,13 +231,7 @@
       const m = text(scope).match(RP);
       price = m ? m[0] : "";
     }
-    const imgs = new Set();
-    for (const i of [].concat((ld && ld.image) || [])) imgs.add(typeof i === "string" ? i : i.url);
-    if (meta("og:image")) imgs.add(meta("og:image"));
-    document.querySelectorAll("img").forEach(i => {
-      const src = i.currentSrc || i.src;
-      if (src && /^https:/.test(src) && i.naturalWidth >= 250 && /susercontent|tokopedia|tiktok|image/.test(src)) imgs.add(bigImage(src));
-    });
+    const imgs = galleryImages(ld);
     const body = document.body.innerText || "";
     const sold = (body.match(/([\d.,]+\s?(?:rb|k|jt)?\+?)\s*terjual/i) || [])[1];
     const rating = (body.match(/(\d\.\d)\s*(?:\/\s*5|\n|\s)*(?:[\d.,]+\s?(?:rb|k)?\+?\s*)?(?:penilaian|ulasan|rating)/i) || [])[1];
@@ -226,7 +240,7 @@
     const groups = variantGroups();
     return {
       url: cleanUrl(location.href), shop_name: shopName(), title, description: (ld && ld.description) || sectionText(true) || meta("og:description"),
-      price, category: breadcrumb(), images: [...imgs].filter(Boolean).slice(0, 9), sold, rating, review_count: reviews, stock,
+      price, category: breadcrumb(), images: imgs.slice(0, 9), sold, rating, review_count: reviews, stock,
       variants: combos(groups), _variantGroups: groups
     };
   }

@@ -35,3 +35,17 @@ assert.strictEqual(t.variants[0].image, "https://images.tokopedia.net/p.jpg"); a
 // sampah -> null
 assert.strictEqual(P.parse({ a: 1 }, "shopee.co.id"), null); assert.strictEqual(P.parse("bukan json", "shopee.co.id"), null);
 console.log("pdp ok");
+
+// urutan varian mengikuti urutan pilihan tingkat (seperti halaman supplier), walau data model acak
+{
+  const P = (typeof require === "function" && (() => { try { return require("../../chrome_extension/pdp.js"); } catch (e) { return null; } })()) || global.CandraPdp;
+  if (P && P.parse) {
+    const body = JSON.stringify({ data: { item: { item_id: 1, title: "x", images: ["a", "b", "c"], tier_variations: [{ name: "Tipe", options: ["T1", "T2"] }, { name: "Warna", options: ["Hitam", "Putih"] }],
+      models: [{ price: 20000000000, extinfo: { tier_index: [1, 0] } }, { price: 10000000000, extinfo: { tier_index: [0, 1] } }, { price: 15000000000, extinfo: { tier_index: [0, 0] } }, { price: 25000000000, extinfo: { tier_index: [1, 1] } }] } } });
+    const d = P.parse(body, "shopee.co.id");
+    const order = d.variants.map(v => Object.values(v.options).join("-"));
+    if (order.join() !== "T1-Hitam,T1-Putih,T2-Hitam,T2-Putih") throw new Error("urutan varian salah: " + order.join());
+    if (d.images.length !== 3) throw new Error("jumlah foto salah");
+    console.log("pdp urutan ok");
+  }
+}

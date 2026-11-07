@@ -46,8 +46,11 @@
       if (!Object.keys(options).length) continue;
       const price = mp(m) / k;
       const stock = m.stock != null ? num(m.stock) : (m.normal_stock != null ? num(m.normal_stock) : "");
-      variants.push({ options, price: price ? Math.round(price) : "", stock, image });
+      variants.push({ options, price: price ? Math.round(price) : "", stock, image, _ord: idx && tiers.length ? idx.slice() : null });
     }
+    // urutan seperti di halaman supplier: menurut urutan pilihan tiap tingkat (bukan urutan acak data model)
+    if (variants.every(v => v._ord)) variants.sort((a, b) => { for (let i = 0; i < Math.max(a._ord.length, b._ord.length); i++) { const d = (a._ord[i] || 0) - (b._ord[i] || 0); if (d) return d; } return 0; });
+    variants.forEach(v => { delete v._ord; });
     const cats = Array.isArray(it.categories) ? it.categories : (Array.isArray(it.fe_categories) ? it.fe_categories : []);
     const category = cats.map(c => c && (c.display_name || c.name)).filter(Boolean).join(" > ");
     const ir = isObj(it.item_rating) ? it.item_rating : {};
