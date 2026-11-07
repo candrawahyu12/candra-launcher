@@ -6,6 +6,10 @@ function sendBg(msg, cb) {
 // CANDRA Capture - content script. Hanya MEMBACA halaman yang sedang Anda lihat; tidak membuka/mengunduh halaman lain,
 // tidak menyentuh CAPTCHA/login/cookie. Data dikirim lewat background.js ke aplikasi CANDRA di komputer Anda.
 (() => {
+  // Setelah ekstensi dimuat ulang/diperbarui, skrip lama di tab yang masih terbuka kehilangan ekstensinya: diam saja (bukan galat) dan tunggu tab dimuat ulang.
+  const alive = () => { try { return !!(chrome.runtime && chrome.runtime.id); } catch (e) { return false; } };
+  window.addEventListener("unhandledrejection", e => { const t = String((e.reason && e.reason.message) || e.reason || ""); if (/Extension context invalidated|Receiving end does not exist|message port closed/i.test(t)) e.preventDefault(); });
+  window.addEventListener("error", e => { if (/Extension context invalidated/i.test(String(e.message || ""))) e.preventDefault(); });
   "use strict";
   const HOST = location.hostname;
   const IS_SHOPEE = /(^|\.)shopee\.co\.id$/.test(HOST);
@@ -337,6 +341,8 @@ function sendBg(msg, cb) {
     return { state: "done", cards };
   }
   function startGrab(m) {
+    if (!alive()) return;
+    if (!alive()) return;
     const token = ++G.seq;
     G.state = "running"; G.note = ""; G.result = null;
     (m.kind === "list" ? runGrabList(token, Math.min(m.limit || 60, 200)) : runGrabDetail(token))
@@ -454,6 +460,7 @@ function sendBg(msg, cb) {
   mount();
 
   chrome.runtime.onMessage.addListener((m, _s, reply) => {
+    if (!alive()) return false;
     if (m.type === "grabStart") { startGrab(m); reply({ ok: true }); return; }
     if (m.type === "grabPoll") { reply({ state: G.state, note: G.note, result: G.state === "done" || G.state === "failed" || G.state === "needs_human" ? G.result : null }); return; }
     if (m.type === "grabCancel") { G.seq++; G.state = "idle"; reply({ ok: true }); return; }

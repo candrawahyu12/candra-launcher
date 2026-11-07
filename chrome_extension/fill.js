@@ -6,6 +6,10 @@ function sendBg(msg, cb) {
 // CANDRA Isi Form: mengisi form "tambah produk" di Seller Center yang SUDAH Anda buka & login sendiri.
 // Tidak menyimpan/membaca password atau cookie, tidak menekan tombol kirim, tidak melewati CAPTCHA. Anda yang memeriksa & mengirim.
 (() => {
+  // Setelah ekstensi dimuat ulang/diperbarui, skrip lama di tab yang masih terbuka kehilangan ekstensinya: diam saja (bukan galat) dan tunggu tab dimuat ulang.
+  const alive = () => { try { return !!(chrome.runtime && chrome.runtime.id); } catch (e) { return false; } };
+  window.addEventListener("unhandledrejection", e => { const t = String((e.reason && e.reason.message) || e.reason || ""); if (/Extension context invalidated|Receiving end does not exist|message port closed/i.test(t)) e.preventDefault(); });
+  window.addEventListener("error", e => { if (/Extension context invalidated/i.test(String(e.message || ""))) e.preventDefault(); });
   if (window.__candraFill) return; window.__candraFill = true;
   const send = (type, extra = {}) => new Promise(res => sendBg({ type, ...extra }, r => res(r || { ok: false, error: "tidak ada respons dari ekstensi" })));
   let rules = null, queue = [], cur = null, report = [];
