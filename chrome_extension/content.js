@@ -1,7 +1,18 @@
-// Kirim pesan ke service worker dengan aman: tidak melempar galat bila ekstensi baru dimuat ulang / service worker belum siap, dan lastError selalu dibaca.
-function sendBg(msg, cb) {
-  try { chrome.runtime.sendMessage(msg, r => { void chrome.runtime.lastError; if (cb) cb(r); }); }
-  catch (e) { if (cb) cb(undefined); }
+// Kirim pesan ke service worker dengan aman: tidak melempar galat, lastError selalu dibaca, dicoba ulang 2x (service worker bisa sedang bangun),
+// dan bila tetap gagal, alasan sebenarnya dikembalikan agar terlihat di panel.
+function sendBg(msg, cb, tries) {
+  tries = tries || 0;
+  const fail = reason => {
+    if (tries < 2) return setTimeout(() => sendBg(msg, cb, tries + 1), 700 * (tries + 1));
+    if (cb) cb({ ok: false, error: "Ekstensi tidak merespons (" + reason + "). Muat ulang ekstensi (⟳ di chrome://extensions) lalu tekan F5 di halaman ini; pastikan aplikasi CANDRA sedang berjalan." });
+  };
+  try {
+    chrome.runtime.sendMessage(msg, r => {
+      const le = chrome.runtime.lastError;
+      if (le || r === undefined) return fail(le ? le.message : "tanpa balasan");
+      if (cb) cb(r);
+    });
+  } catch (e) { fail(String((e && e.message) || e)); }
 }
 // CANDRA Capture - content script. Hanya MEMBACA halaman yang sedang Anda lihat; tidak membuka/mengunduh halaman lain,
 // tidak menyentuh CAPTCHA/login/cookie. Data dikirim lewat background.js ke aplikasi CANDRA di komputer Anda.
