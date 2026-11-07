@@ -1,8 +1,13 @@
+// Kirim pesan ke service worker dengan aman: tidak melempar galat bila ekstensi baru dimuat ulang / service worker belum siap, dan lastError selalu dibaca.
+function sendBg(msg, cb) {
+  try { chrome.runtime.sendMessage(msg, r => { void chrome.runtime.lastError; if (cb) cb(r); }); }
+  catch (e) { if (cb) cb(undefined); }
+}
 // CANDRA Isi Form: mengisi form "tambah produk" di Seller Center yang SUDAH Anda buka & login sendiri.
 // Tidak menyimpan/membaca password atau cookie, tidak menekan tombol kirim, tidak melewati CAPTCHA. Anda yang memeriksa & mengirim.
 (() => {
   if (window.__candraFill) return; window.__candraFill = true;
-  const send = (type, extra = {}) => new Promise(res => chrome.runtime.sendMessage({ type, ...extra }, r => res(r || { ok: false, error: "tidak ada respons dari ekstensi" })));
+  const send = (type, extra = {}) => new Promise(res => sendBg({ type, ...extra }, r => res(r || { ok: false, error: "tidak ada respons dari ekstensi" })));
   let rules = null, queue = [], cur = null, report = [];
 
   // ---------- helper kolom

@@ -1,3 +1,8 @@
+// Kirim pesan ke service worker dengan aman: tidak melempar galat bila ekstensi baru dimuat ulang / service worker belum siap, dan lastError selalu dibaca.
+function sendBg(msg, cb) {
+  try { chrome.runtime.sendMessage(msg, r => { void chrome.runtime.lastError; if (cb) cb(r); }); }
+  catch (e) { if (cb) cb(undefined); }
+}
 // CANDRA Capture - content script. Hanya MEMBACA halaman yang sedang Anda lihat; tidak membuka/mengunduh halaman lain,
 // tidak menyentuh CAPTCHA/login/cookie. Data dikirim lewat background.js ke aplikasi CANDRA di komputer Anda.
 (() => {
@@ -311,7 +316,7 @@
     window.scrollTo({ top: 0, behavior: "smooth" }); await sleep(250);
     await waitApi(3000);
     const d = mergeApi(extractDetail());
-    const st = await new Promise(res => chrome.runtime.sendMessage({ type: "settings" }, x => res((x && x.result) || {})));
+    const st = await new Promise(res => sendBg({ type: "settings" }, x => res((x && x.result) || {})));
     if (d._api) await fixVariantPrices(d, st);
     if (!d._api && st.deepVariants !== false && Object.keys(variantGroups()).length) {
       setNote("membaca harga & foto tiap varian...");
@@ -350,7 +355,7 @@
 #candra-panel.min{padding:6px 8px;max-width:none}#candra-panel.min > *:not(.chd){display:none!important}`;
   document.documentElement.appendChild(style);
 
-  const send = items => new Promise(res => chrome.runtime.sendMessage({ type: "send", items }, r => res(r || { ok: false, error: "tidak ada respons" })));
+  const send = items => new Promise(res => sendBg({ type: "send", items }, r => res(r || { ok: false, error: "tidak ada respons" })));
   let sentCount = 0;
   const panel = document.createElement("div");
   panel.id = "candra-panel";
@@ -390,7 +395,7 @@
     detailBtn.onclick = async () => {
       detailBtn.disabled = true;
       const d = mergeApi(extractDetail());
-      const st = await new Promise(res => chrome.runtime.sendMessage({ type: "settings" }, r => res((r && r.result) || {})));
+      const st = await new Promise(res => sendBg({ type: "settings" }, r => res((r && r.result) || {})));
       if (d._api) await fixVariantPrices(d, st);
       if (!d._api && st.deepVariants !== false && Object.keys(variantGroups()).length) {
         msg.textContent = "Membaca harga & foto tiap varian...";
@@ -408,7 +413,7 @@
       const cards = cardAnchors().slice(0, 60);
       if (!cards.length) { msg.textContent = "Tidak ada kartu produk terdeteksi di halaman ini."; return; }
       all.disabled = true; const rr = await send(cards.map(c => Object.assign(extractCard(c), { partial: true })), cards.length); report(rr, cards.length);
-      if (rr.ok && rr.result && rr.result.queuedDetails) { msg.textContent += " | " + rr.result.queuedDetails + " produk dibuka otomatis untuk ambil varian & deskripsi (jangan tutup Chrome)"; chrome.runtime.sendMessage({ type: "queueRun" }, () => {}); }
+      if (rr.ok && rr.result && rr.result.queuedDetails) { msg.textContent += " | " + rr.result.queuedDetails + " produk dibuka otomatis untuk ambil varian & deskripsi (jangan tutup Chrome)"; sendBg({ type: "queueRun" }, () => {}); }
       all.disabled = false;
     };
     panel.insertBefore(all, msg);
@@ -444,8 +449,8 @@
     floatBtn.className = "candra-btn " + (report(r, 1) ? "ok" : "err"); floatBtn.textContent = r.ok ? "Terkirim ✓" : "Gagal";
   };
 
-  chrome.runtime.sendMessage({ type: "settings" }, r => { const x = r && r.result && r.result.rules; if (x) R = { ...R, ...x }; });
-  chrome.runtime.sendMessage({ type: "rules" }, r => { if (r && r.ok && r.result) R = { ...R, ...r.result }; });
+  sendBg({ type: "settings" }, r => { const x = r && r.result && r.result.rules; if (x) R = { ...R, ...x }; });
+  sendBg({ type: "rules" }, r => { if (r && r.ok && r.result) R = { ...R, ...r.result }; });
   mount();
 
   chrome.runtime.onMessage.addListener((m, _s, reply) => {

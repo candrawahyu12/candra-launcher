@@ -1,9 +1,14 @@
+// Kirim pesan ke service worker dengan aman: tidak melempar galat bila ekstensi baru dimuat ulang / service worker belum siap, dan lastError selalu dibaca.
+function sendBg(msg, cb) {
+  try { chrome.runtime.sendMessage(msg, r => { void chrome.runtime.lastError; if (cb) cb(r); }); }
+  catch (e) { if (cb) cb(undefined); }
+}
 const $ = id => document.getElementById(id);
 const say = (t, err) => { $("m").textContent = t; $("m").className = err ? "e" : ""; };
 chrome.storage.local.get(["base", "token", "deepVariants", "autoGrab"]).then(c => { $("deep").checked = c.deepVariants !== false; $("auto").checked = c.autoGrab !== false; $("base").value = c.base || "http://127.0.0.1:8765"; $("token").value = c.token || ""; });
 $("save").onclick = async () => {
   await chrome.storage.local.set({ base: $("base").value.trim(), token: $("token").value.trim(), deepVariants: $("deep").checked, autoGrab: $("auto").checked });
-  chrome.runtime.sendMessage({ type: "ping" }, r => say(r && r.ok ? "Terhubung ke CANDRA ✓" : "Gagal: " + (r && r.error), !(r && r.ok)));
+  sendBg({ type: "ping" }, r => say(r && r.ok ? "Terhubung ke CANDRA ✓" : "Gagal: " + (r && r.error), !(r && r.ok)));
 };
 $("diag").onclick = async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -44,6 +49,6 @@ const showQ = async () => {
   const { grabStatus: g } = await chrome.storage.local.get("grabStatus");
   $("q").textContent = !g ? "Belum ada aktivitas." : g.error ? "Gagal: " + g.error : g.running ? "Bekerja: " + (g.note || "") + " — " + (g.url || "").slice(0, 60) : (g.note || "Tidak ada antrean.");
 };
-$("qrun").onclick = () => chrome.runtime.sendMessage({ type: "queueRun" }, () => { say("Mengambil antrean…"); setTimeout(showQ, 1500); });
-$("qstop").onclick = () => chrome.runtime.sendMessage({ type: "queueStop" }, () => say("Dihentikan setelah halaman ini."));
+$("qrun").onclick = () => sendBg({ type: "queueRun" }, () => { say("Mengambil antrean…"); setTimeout(showQ, 1500); });
+$("qstop").onclick = () => sendBg({ type: "queueStop" }, () => say("Dihentikan setelah halaman ini."));
 showQ(); setInterval(showQ, 2000);
