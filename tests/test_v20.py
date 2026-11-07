@@ -75,3 +75,26 @@ class V202SimulatorTests(unittest.TestCase):
         self.assertNotIn("processed_images", r["payload"])      # path lokal tidak bocor
         self.assertEqual(r["payload"]["brand"], "Tanpa Merek")
         self.assertFalse(r["payload"]["cod_enabled"])
+
+
+class V205CertTests(unittest.TestCase):
+    def test_certificate_claims_removed(self):
+        t = clean_text("Matras Protector SNI Bersertifikat BPOM Premium", ["cert"], is_title=True)[0]
+        self.assertEqual(t, "Matras Protector Premium")
+        d = clean_text("Kasur busa.\nProduk bersertifikat SNI dan lulus uji.\nUkuran 90x200 cm bahan busa", ["cert"])[0]
+        self.assertNotIn("sertifikat", d.lower())
+        self.assertIn("Ukuran 90x200 cm", d)
+
+    def test_upload_payload_is_auto_cleaned_and_user_prefix_kept(self):
+        from tests.test_v13 import make_svc, DETAIL
+        svc = make_svc()
+        svc.capture_products([dict(DETAIL, title="Meja Lipat COD SNI WA 0812-3456-7890", description="Meja kuat.\nHubungi WA 0812-3456-7890\nBersertifikat SNI")], svc.capture_token)
+        cid = svc.db.one("SELECT collection_id c FROM scrape_jobs ORDER BY id DESC")["c"]
+        svc.set_collection_settings(cid, {"desc_prefix": ["Selamat Datang Di Toko Kami"], "title_prefix": ["NEW"]})
+        pv = svc.preview_upload(collection_id=cid, target="sandbox", selection={"mode": "all"}, config={})
+        self.assertNotIn("SUPPLIER_DATA_IN_TEXT", pv["errorsByCode"])
+        pl = svc.simulate_listing(pv["batchId"], pv["items"][0]["productId"])["payload"]
+        self.assertTrue(pl["title"].startswith("NEW "))
+        self.assertNotIn("0812", pl["title"] + pl["description"])
+        self.assertNotIn("sertifikat", pl["description"].lower())
+        self.assertIn("Selamat Datang Di Toko Kami", pl["description"])

@@ -14,7 +14,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from .analyzer import clean_text, supplier_data_found
+from .analyzer import CLEANABLE, clean_text, supplier_data_found
 from .attributes import extract as extract_attrs
 from .db import DB
 from .exporter import export_csv, load_template
@@ -248,8 +248,16 @@ def build_payload(db: DB, product_id: int, target: str, cfg: dict, index: int = 
     desc = (p["description_edited"] if p["description_edited"] is not None else p["description_original"]) or ""
     if not title:
         errors.append("MISSING_TITLE")
-    title = clean_text(title, ["cod"], is_title=True)[0] or title   # COD dihapus TANPA terkecuali (marketplace: COD selalu nonaktif)
-    desc = clean_text(desc, ["cod"])[0]
+    # Pembersihan OTOMATIS terakhir sebelum dikirim (COD, sertifikat, kontak/link, sapaan/ajakan toko, nama toko/merek yang diketahui);
+    # tambahan Anda (awalan/akhiran) ditambahkan SESUDAH ini, jadi tidak ikut dibersihkan.
+    _auto = [t for t in CLEANABLE if t != "title_tag"]
+    _names = cfg.get("shop_names") or []
+    title = clean_text(title, _auto, _names, is_title=True)[0] or title
+    desc = clean_text(desc, _auto, _names)[0]
+    leaks = supplier_data_found(title + "\n" + desc, cfg.get("shop_names") or [])  # dicek sebelum tambahan Anda; sisa = yang tak bisa dibersihkan otomatis
+    if leaks:
+        errors.append("SUPPLIER_DATA_IN_TEXT")  # nomor/link/nama marketplace/nama toko supplier: bersihkan dulu
+        warnings.append("SUPPLIER_DATA:" + ",".join(leaks))
     def pick(key: str) -> str:  # beberapa pilihan teks dipakai bergilir menurut urutan produk (deterministik)
         opts = cfg.get(key) or []
         if isinstance(opts, str):
@@ -260,10 +268,6 @@ def build_payload(db: DB, product_id: int, target: str, cfg: dict, index: int = 
     if len(desc) > cfg["desc_max"]:
         errors.append("DESC_TOO_LONG")
 
-    leaks = supplier_data_found(title + "\n" + desc, cfg.get("shop_names") or [])
-    if leaks:
-        errors.append("SUPPLIER_DATA_IN_TEXT")  # nomor/link/nama marketplace/nama toko supplier: bersihkan dulu
-        warnings.append("SUPPLIER_DATA:" + ",".join(leaks))
 
     category = None
     mkt = cfg.get("marketplace") or target  # mapping disimpan per marketplace (shopee/tokopedia/tiktok), bukan per konektor

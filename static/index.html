@@ -4,17 +4,22 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CANDRA Launcher</title>
+<script>try{var t=localStorage.getItem("candraTheme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
 <header class="topbar">
   <div class="brand"><span class="logo">C</span><b>CANDRA</b><small>Launcher</small></div>
   <nav id="nav"></nav>
+  <select id="themesel" class="themesel" title="Tema tampilan" aria-label="Tema tampilan"><option value="auto">🌓 Otomatis</option><option value="light">☀️ Terang</option><option value="dark">🌙 Gelap</option></select>
   <div class="ver" id="ver"></div>
 </header>
 <main id="view"></main>
 <div id="toast" class="toast" hidden></div>
 <div id="modal" class="modal" hidden></div>
+<script>(function(){var s=document.getElementById("themesel"),t="auto";try{t=localStorage.getItem("candraTheme")||"auto"}catch(e){}
+s.value=t;s.onchange=function(){var v=s.value;try{localStorage.setItem("candraTheme",v)}catch(e){}
+if(v==="auto")document.documentElement.removeAttribute("data-theme");else document.documentElement.setAttribute("data-theme",v)}})();</script>
 <script src="/static/app.js"></script>
 </body>
 </html>

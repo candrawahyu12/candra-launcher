@@ -344,7 +344,10 @@
 .candra-btn:hover{background:#1f4fd1}.candra-btn.ok{background:#13a05b}.candra-btn.err{background:#d93b3b}
 #candra-panel{position:fixed;right:16px;bottom:16px;z-index:2147483000;background:#16213e;color:#fff;border-radius:10px;padding:10px 12px;font:13px system-ui;box-shadow:0 2px 12px rgba(0,0,0,.4);max-width:280px}
 #candra-panel button{background:#2f6bff;color:#fff;border:0;border-radius:6px;padding:6px 10px;margin-top:6px;cursor:pointer;font:600 12px system-ui;display:block;width:100%}
-#candra-panel .m{font-size:12px;opacity:.85;margin-top:4px}`;
+#candra-panel .m{font-size:12px;opacity:.85;margin-top:4px}
+#candra-panel .chd{display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:move;user-select:none;touch-action:none}
+#candra-panel .chd button{width:auto;margin:0;padding:2px 8px;background:#33405f;display:inline-block}
+#candra-panel.min{padding:6px 8px;max-width:none}#candra-panel.min > *:not(.chd){display:none!important}`;
   document.documentElement.appendChild(style);
 
   const send = items => new Promise(res => chrome.runtime.sendMessage({ type: "send", items }, r => res(r || { ok: false, error: "tidak ada respons" })));
@@ -353,7 +356,27 @@
   panel.id = "candra-panel";
   const msg = document.createElement("div"); msg.className = "m"; msg.textContent = "Terkirim: 0";
   const title = document.createElement("b"); title.textContent = "CANDRA Capture";
-  panel.append(title, msg);
+  // Header: seret untuk memindahkan panel; tombol – / + untuk mengecilkan agar tombol/teks di belakangnya bisa diakses.
+  const head = document.createElement("div"); head.className = "chd";
+  const minBtn = document.createElement("button"); minBtn.type = "button"; minBtn.title = "Kecilkan / besarkan";
+  head.append(title, minBtn);
+  panel.append(head, msg);
+  const store = { get: k => new Promise(r => { try { chrome.storage.local.get(k, v => r(v || {})); } catch (e) { r({}); } }), set: o => { try { chrome.storage.local.set(o); } catch (e) { /* abaikan */ } } };
+  const setMin = m => { panel.classList.toggle("min", m); minBtn.textContent = m ? "+" : "–"; store.set({ panelMin: m }); };
+  minBtn.addEventListener("click", e => { e.stopPropagation(); setMin(!panel.classList.contains("min")); });
+  const place = (x, y) => {
+    const w = panel.offsetWidth || 200, h = panel.offsetHeight || 40;
+    x = Math.max(4, Math.min(innerWidth - w - 4, x)); y = Math.max(4, Math.min(innerHeight - h - 4, y));
+    panel.style.left = x + "px"; panel.style.top = y + "px"; panel.style.right = "auto"; panel.style.bottom = "auto";
+    return { x, y };
+  };
+  let drag = null;
+  head.addEventListener("pointerdown", e => { if (e.target === minBtn) return; const r = panel.getBoundingClientRect(); drag = { dx: e.clientX - r.left, dy: e.clientY - r.top }; head.setPointerCapture(e.pointerId); e.preventDefault(); });
+  head.addEventListener("pointermove", e => { if (drag) place(e.clientX - drag.dx, e.clientY - drag.dy); });
+  head.addEventListener("pointerup", e => { if (!drag) return; drag = null; const r = panel.getBoundingClientRect(); store.set({ panelPos: { x: r.left, y: r.top } }); });
+  head.addEventListener("dblclick", () => setMin(!panel.classList.contains("min")));
+  store.get(["panelPos", "panelMin"]).then(v => { setMin(!!v.panelMin); if (v.panelPos) place(v.panelPos.x, v.panelPos.y); });
+  window.addEventListener("resize", () => { const r = panel.getBoundingClientRect(); if (panel.style.left) place(r.left, r.top); });
   function report(r, n) {
     if (r.ok) { sentCount += n; const x = r.result; msg.textContent = `Terkirim: ${sentCount} (baru ${x.saved}, diperbarui ${x.updated}, gagal ${x.failed.length})` + (x.failed[0] ? " - " + x.failed[0].error : ""); }
     else msg.textContent = "Gagal: " + r.error;

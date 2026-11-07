@@ -259,8 +259,9 @@ class PolicyTests(unittest.TestCase):
             self.svc.set_category_mapping("csv_feed", cat, "sandbox", "1", cat)
 
     def test_supplier_data_blocks_until_cleaned(self):
+        # v0.20.5: data supplier dibersihkan OTOMATIS saat preview, jadi tidak lagi memblokir; payload tidak boleh memuat nomor/link
         r = self.svc.preview_upload(collection_id=self.col, target="sandbox", selection={"mode": "all"}, config={})
-        self.assertIn("SUPPLIER_DATA_IN_TEXT", r["errorsByCode"])
+        self.assertNotIn("SUPPLIER_DATA_IN_TEXT", r["errorsByCode"])
         self.svc.db.execute("UPDATE products SET description_original='Dijual di Shopee, chat WA 0812-3456-7890' WHERE id=2")
         a = self.svc.analyze_collection(self.col)
         self.assertGreater(a["totals"].get("marketplace", 0), 0)

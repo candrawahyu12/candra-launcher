@@ -469,7 +469,7 @@ function aiDialog(id, after) {
 }
 
 /* ---------- Analisis & bersihkan ---------- */
-const CLEAN_LABEL = { cod: "COD / bayar di tempat (dihapus tanpa terkecuali)", phone: "Nomor telepon", url: "Link", email: "Email", handle: "@handle", contact_label: "Label kontak (WA:, IG:)", promo: "Kalimat promo / ajakan chat", welcome: "Sapaan toko (Selamat datang, terima kasih sudah berbelanja, 'toko kami')", brand_label: "Label Merek:/Toko:", title_tag: "Tag di judul ([TOP], [READY])", shop_name: "Merek / nama toko", repeated_sentence: "Kalimat berulang" };
+const CLEAN_LABEL = { cert: "Klaim sertifikat (SNI, BPOM, ISO, bersertifikat…)", cod: "COD / bayar di tempat (dihapus tanpa terkecuali)", phone: "Nomor telepon", url: "Link", email: "Email", handle: "@handle", contact_label: "Label kontak (WA:, IG:)", promo: "Kalimat promo / ajakan chat", welcome: "Sapaan toko (Selamat datang, terima kasih sudah berbelanja, 'toko kami')", brand_label: "Label Merek:/Toko:", title_tag: "Tag di judul ([TOP], [READY])", shop_name: "Merek / nama toko", repeated_sentence: "Kalimat berulang" };
 function analyzeDialog(id, after) {
   guard(async () => {
     const shop = h("input", { placeholder: "Merek/nama toko tambahan yang mau dibuang (pisahkan koma) — merek yang yakin dibuang otomatis", style: "width:100%" });
