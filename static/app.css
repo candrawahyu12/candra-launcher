@@ -65,3 +65,5 @@ mark.dif{background:#d9f4e6;color:inherit;border-radius:3px;padding:0 1px}.topt{
 :root[data-theme=dark] button.danger,:root[data-theme=dark] .bad{color:#ff8585}:root[data-theme=dark] .tabs a.on{color:#8db1ff}:root[data-theme=dark] .badge{color:var(--mut)}
 :root[data-theme=dark] .badge.ok{color:#7fe0ae}:root[data-theme=dark] .badge.bad{color:#ff9b9b}:root[data-theme=dark] .badge.run{color:#9cb9ff}:root[data-theme=dark] .badge.warn{color:#f0cf7a}
 .badge.ok{color:#0b6b3b}.badge.bad{color:#9b1f1f}.badge.run{color:#1b45b5}.badge.warn{color:#8a5d00}
+
+.reloadbtn{background:transparent;color:inherit;border:1px solid var(--line,rgba(128,128,128,.4));border-radius:6px;width:26px;height:26px;padding:0;margin-left:2px;cursor:pointer;font-size:15px;line-height:1;display:grid;place-items:center}.reloadbtn:hover{background:var(--pri);color:#fff;border-color:var(--pri)}

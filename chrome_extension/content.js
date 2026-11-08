@@ -188,12 +188,17 @@ function sendBg(msg, cb, tries) {
     const key = o => Object.values(o || {}).map(x => String(x).trim().toLowerCase()).sort().join("|");
     const byKey = new Map(dv.map(x => [key(x.options), x]));
     let changed = 0;
-    for (const v of vs) {
+    // varian habis (tombol nonaktif di halaman, atau stok 0 di data) tidak diambil
+    const gone = v => { const m = byKey.get(key(v.options)); return !!(m && m.soldOut) || (v.stock !== "" && v.stock != null && Number(v.stock) === 0); };
+    const before = vs.length;
+    d.variants = vs.filter(v => !gone(v));
+    d._soldOutSkipped = before - d.variants.length;
+    for (const v of d.variants) {
       const m = byKey.get(key(v.options));
       const n = m && !/[-–]/.test(String(m.price)) ? Number(String(m.price).replace(/[^\d]/g, "")) : 0;
       if (n > 0) { if (Number(v.price) !== n) changed++; v.price = n; v._pageChecked = true; }
     }
-    if (!vs.some(v => v._pageChecked) && dv.length >= vs.length) d.variants = dv.map((x, i) => ({ ...x, image: x.image || (vs[i] && vs[i].image) || "" }));
+    if (!d.variants.some(v => v._pageChecked) && dv.length >= vs.length) d.variants = dv.filter(x => !x.soldOut).map((x, i) => ({ ...x, image: x.image || (vs[i] && vs[i].image) || "" }));
     const ps = (d.variants || []).map(v => Number(v.price)).filter(x => x > 0);
     if (ps.length) d.price = Math.min(...ps);
     d._priceFix = { checked: (d.variants || []).filter(v => v._pageChecked).length, total: (d.variants || []).length, changed };
@@ -223,7 +228,7 @@ function sendBg(msg, cb, tries) {
         while (Date.now() - t0 < maxMs && currentPrice() === before) await sleep(60);
       }
       const sm = sr ? (document.body.innerText || "").match(sr) : null;
-      out.push({ options, price: disabled ? "" : currentPrice(), stock: disabled ? 0 : (sm ? sm[1] : ""), image: swatch || mainImage() });
+      out.push({ options, price: disabled ? "" : currentPrice(), stock: disabled ? 0 : (sm ? sm[1] : ""), image: swatch || mainImage(), soldOut: disabled });
     }
     return out;
   }
@@ -348,7 +353,7 @@ function sendBg(msg, cb, tries) {
     if (d._api) await fixVariantPrices(d, st);
     if (!d._api && st.deepVariants !== false && Object.keys(variantGroups()).length) {
       setNote("membaca harga & foto tiap varian...");
-      try { const dv = await deepVariants(); if (dv.length) d.variants = dv; } catch (e) { /* tetap kirim tanpa detail varian */ }
+      try { const dv = (await deepVariants()).filter(x => !x.soldOut); if (dv.length) d.variants = dv; } catch (e) { /* tetap kirim tanpa detail varian */ }
     }
     return { state: "done", data: d, missing: health(d) };
   }
@@ -394,10 +399,7 @@ function sendBg(msg, cb, tries) {
   // Header: seret untuk memindahkan panel; tombol – / + untuk mengecilkan agar tombol/teks di belakangnya bisa diakses.
   const head = document.createElement("div"); head.className = "chd";
   const minBtn = document.createElement("button"); minBtn.type = "button"; minBtn.title = "Kecilkan / besarkan";
-  const refBtn = document.createElement("button"); refBtn.type = "button"; refBtn.title = "Muat ulang tab ini"; refBtn.textContent = "⟳";
-  refBtn.addEventListener("click", e => { e.stopPropagation(); location.reload(); });
-  const left = document.createElement("span"); left.style.cssText = "display:flex;align-items:center;gap:6px"; left.append(title, refBtn);
-  head.append(left, minBtn);
+  head.append(title, minBtn);
   panel.append(head, msg);
   const store = { get: k => new Promise(r => { try { chrome.storage.local.get(k, v => r(v || {})); } catch (e) { r({}); } }), set: o => { try { chrome.storage.local.set(o); } catch (e) { /* abaikan */ } } };
   const setMin = m => { panel.classList.toggle("min", m); minBtn.textContent = m ? "+" : "–"; store.set({ panelMin: m }); };
@@ -409,7 +411,7 @@ function sendBg(msg, cb, tries) {
     return { x, y };
   };
   let drag = null;
-  head.addEventListener("pointerdown", e => { if (e.target === minBtn || e.target === refBtn) return; const r = panel.getBoundingClientRect(); drag = { dx: e.clientX - r.left, dy: e.clientY - r.top }; head.setPointerCapture(e.pointerId); e.preventDefault(); });
+  head.addEventListener("pointerdown", e => { if (e.target === minBtn) return; const r = panel.getBoundingClientRect(); drag = { dx: e.clientX - r.left, dy: e.clientY - r.top }; head.setPointerCapture(e.pointerId); e.preventDefault(); });
   head.addEventListener("pointermove", e => { if (drag) place(e.clientX - drag.dx, e.clientY - drag.dy); });
   head.addEventListener("pointerup", e => { if (!drag) return; drag = null; const r = panel.getBoundingClientRect(); store.set({ panelPos: { x: r.left, y: r.top } }); });
   head.addEventListener("dblclick", () => setMin(!panel.classList.contains("min")));
@@ -432,7 +434,7 @@ function sendBg(msg, cb, tries) {
       if (d._api) await fixVariantPrices(d, st);
       if (!d._api && st.deepVariants !== false && Object.keys(variantGroups()).length) {
         msg.textContent = "Membaca harga & foto tiap varian...";
-        try { const dv = await deepVariants(); if (dv.length) d.variants = dv; } catch (e) { /* tetap kirim tanpa detail varian */ }
+        try { const dv = (await deepVariants()).filter(x => !x.soldOut); if (dv.length) d.variants = dv; } catch (e) { /* tetap kirim tanpa detail varian */ }
       }
       const miss = health(d);
       const r = await send([d]);

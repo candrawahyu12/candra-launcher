@@ -9,7 +9,7 @@
 </head>
 <body>
 <header class="topbar">
-  <div class="brand"><span class="logo">C</span><b>CANDRA</b><small>Launcher</small></div>
+  <div class="brand"><span class="logo">C</span><b>CANDRA</b><small>Launcher</small><button type="button" id="reloadbtn" class="reloadbtn" title="Muat ulang halaman (F5)" aria-label="Muat ulang halaman">⟳</button></div>
   <nav id="nav"></nav>
   <select id="themesel" class="themesel" title="Tema tampilan" aria-label="Tema tampilan"><option value="auto">🌓 Otomatis</option><option value="light">☀️ Terang</option><option value="dark">🌙 Gelap</option></select>
   <div class="ver" id="ver"></div>
@@ -17,6 +17,7 @@
 <main id="view"></main>
 <div id="toast" class="toast" hidden></div>
 <div id="modal" class="modal" hidden></div>
+<script>document.getElementById("reloadbtn").addEventListener("click",function(){location.reload()});</script>
 <script>(function(){var s=document.getElementById("themesel"),t="auto";try{t=localStorage.getItem("candraTheme")||"auto"}catch(e){}
 s.value=t;s.onchange=function(){var v=s.value;try{localStorage.setItem("candraTheme",v)}catch(e){}
 if(v==="auto")document.documentElement.removeAttribute("data-theme");else document.documentElement.setAttribute("data-theme",v)}})();</script>
