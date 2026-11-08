@@ -140,7 +140,12 @@ class CandraService:
                 partial = False
             nvar = self.db.one("SELECT COUNT(*) n FROM product_variants WHERE product_id=?", (p["id"],))["n"]
             same = nvar > 1 and self.db.one("SELECT COUNT(DISTINCT price_original) n FROM product_variants WHERE product_id=?", (p["id"],))["n"] <= 1
-            if (p["description_original"] or "").strip() and nvar and not partial and not same:
+            try:
+                verified = bool((json.loads(p["raw_data_json"] or "{}").get("extra") or {}).get("price_verified"))
+            except (ValueError, TypeError, KeyError):
+                verified = False
+            browser_grab = ((json.loads(p["raw_data_json"] or "{}").get("extra") or {}).get("captured_from") == "browser_extension") if p["raw_data_json"] else False
+            if (p["description_original"] or "").strip() and nvar and not partial and not same and (verified or nvar < 2 or not browser_grab):
                 continue    # lengkap: ada deskripsi + varian dengan harga masing-masing
             u = p["source_url"] or ""
             if u.startswith("https://") and bgrab.is_browser_url(u) and JobManager.is_product_url(u) and u not in urls:
@@ -214,7 +219,7 @@ class CandraService:
             " p.source_platform, p.source_url, p.brand, p.sold_count, p.rating, p.review_count, p.view_count,"
             " (p.title_edited IS NOT NULL OR p.description_edited IS NOT NULL) edited, p.weight_edited weightGram, p.preorder_days preorderDays,"
             " COALESCE(p.description_edited,p.description_original) description, p.description_original description_original,"
-            " cp.selected, cp.position, (SELECT COUNT(*) FROM product_images i WHERE i.product_id=p.id) images,"
+            " cp.selected, cp.position, p.raw_data_json, (SELECT COUNT(*) FROM product_images i WHERE i.product_id=p.id) images,"
             " (SELECT source_url FROM product_images i WHERE i.product_id=p.id ORDER BY sort_order LIMIT 1) thumb,"
             " (SELECT COUNT(*) FROM product_variants v WHERE v.product_id=p.id) variants FROM collection_products cp"
             f" JOIN products p ON p.id=cp.product_id WHERE {w} ORDER BY {order}, cp.position LIMIT ? OFFSET ?",
@@ -247,7 +252,13 @@ class CandraService:
             d = r.pop("description") or ""
             orig = r.pop("description_original") or ""
             r["variantPriceSame"] = len(vs) > 1 and len(set(prices)) <= 1  # banyak varian tapi harga sama semua -> kemungkinan harga varian tak terbaca
-            r["incomplete"] = (not orig.strip()) or (not vs) or r["variantPriceSame"]
+            try:
+                _ex = json.loads(r.get("raw_data_json") or "{}").get("extra") or {}
+            except (ValueError, TypeError):
+                _ex = {}
+            r["priceVerified"] = bool(_ex.get("price_verified"))
+            r["priceUnverified"] = len(vs) > 1 and not r["priceVerified"] and _ex.get("captured_from") == "browser_extension"
+            r["incomplete"] = (not orig.strip()) or (not vs) or r["variantPriceSame"] or r["priceUnverified"]
             r["descriptionSnippet"] = d[:160] + ("…" if len(d) > 160 else "")
             if (up_pre or up_suf):  # judul sebagaimana akan terkirim saat upload (awalan/akhiran dari Collection Settings)
                 po = (page - 1) * page_size + rows.index(r)

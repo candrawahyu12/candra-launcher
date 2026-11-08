@@ -165,7 +165,8 @@ def normalize(raw: dict) -> tuple[str, dict]:
         seg = [x for x in urlsplit(p["source_url"]).path.split("/") if x]
         if len(seg) >= 2 and seg[0] not in ("p", "discovery", "find", "search", "s", "product", "shop"):
             shop = seg[0].replace("-", " ")
-    p["extra"] = {"captured_from": "browser_extension", "partial": bool(raw.get("partial")), "price_max": price_max, "shop_name": shop}
+    p["extra"] = {"captured_from": "browser_extension", "partial": bool(raw.get("partial")), "price_max": price_max, "shop_name": shop,
+                  "price_verified": bool(raw.get("_priceFix")) and not raw.get("partial")}  # True = harga tiap varian dicocokkan dengan yang tampil di marketplace
     return plat, p
 
 

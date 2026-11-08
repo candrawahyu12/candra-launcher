@@ -411,7 +411,7 @@ function sendBg(msg, cb, tries) {
   const panel = document.createElement("div");
   panel.id = "candra-panel";
   const msg = document.createElement("div"); msg.className = "m"; msg.textContent = "Terkirim: 0";
-  const title = document.createElement("b"); title.textContent = "CANDRA Capture";
+  const title = document.createElement("b"); title.textContent = "CANDRA Capture v" + (() => { try { return chrome.runtime.getManifest().version; } catch (e) { return "?"; } })();
   // Header: seret untuk memindahkan panel; tombol – / + untuk mengecilkan agar tombol/teks di belakangnya bisa diakses.
   const head = document.createElement("div"); head.className = "chd";
   const minBtn = document.createElement("button"); minBtn.type = "button"; minBtn.title = "Kecilkan / besarkan";
@@ -454,6 +454,7 @@ function sendBg(msg, cb, tries) {
       const miss = health(d);
       const r = await send([d]);
       report(r, 1);
+      if (r.ok && d._priceFix) msg.textContent += " | harga dicek di halaman: " + d.variants.length + " varian" + (d._priceFix.soldOutSkipped ? ", " + d._priceFix.soldOutSkipped + " habis dilewati" : "") + (d._priceFix.uniform && d.variants.length > 2 ? " (harga sama semua - sudah dicek ulang)" : "");
       if (r.ok && miss.length) msg.textContent += " | Tidak terbaca: " + miss.join(", ") + " (lihat 'Unduh diagnostik halaman' di popup)";
       detailBtn.disabled = false;
     };
