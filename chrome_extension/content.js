@@ -93,7 +93,7 @@ function sendBg(msg, cb, tries) {
         const label = text(el) || (el.querySelector("img") && el.querySelector("img").alt) || el.getAttribute("aria-label") || "";
         if (label && label.length < 40 && !seen.has(label)) { seen.add(label); opts.push({ label, el }); }
       }
-      if (opts.length) groups[text(t).replace(/[:\s]+$/, "")] = opts.slice(0, 20);
+      if (opts.length) groups[text(t).replace(/[:\s]+$/, "")] = opts.slice(0, 40);
     }
     return groups;
   }
@@ -138,8 +138,16 @@ function sendBg(msg, cb, tries) {
     }
     return best ? bigImage(best) : null;
   }
+  // Harga yang TAMPIL di halaman (blok harga di bawah judul). Mengabaikan harga coret; rentang "Rp A - Rp B" dikembalikan apa adanya
+  // (artinya varian belum terpilih lengkap), sehingga pemanggil bisa menolaknya.
   function currentPrice() {
     const h = document.querySelector("h1");
+    const re = /^Rp\s?[\d.]+(?:,\d+)?(?:\s*[-–]\s*Rp\s?[\d.]+(?:,\d+)?)?$/i;
+    const struck = e => { for (let n = e, d = 0; n && d < 3; n = n.parentElement, d++) { const t = getComputedStyle(n).textDecorationLine || ""; if (/line-through/.test(t)) return true; } return false; };
+    for (let n = h, d = 0; n && d < 8; n = n.parentElement, d++) {
+      const hit = [...n.querySelectorAll("div,span,p,b,strong")].find(e => !e.closest("#candra-panel") && e.children.length <= 1 && re.test(text(e)) && !struck(e) && e.getClientRects().length);
+      if (hit) return text(hit);
+    }
     const scope = (h && (h.closest("section,main,div[class]") || document.body)) || document.body;
     const m = (scope.innerText || text(scope)).match(rx("price_regex") || /Rp\s?[\d.]+/i);
     return m ? m[0] : "";
@@ -171,10 +179,10 @@ function sendBg(msg, cb, tries) {
   // Harga per varian dari tampilan halaman: dipakai bila data API tidak membawa harga per varian (kosong / sama semua padahal varian banyak).
   async function fixVariantPrices(d, st) {
     const vs = d.variants || [];
-    if (vs.length < 2 || st.deepVariants === false || !Object.keys(variantGroups()).length) return;
-    const ps = vs.map(v => Number(String(v.price || "").replace(/[^\d]/g, "")) || 0);
-    if (ps.every(x => x > 0) && new Set(ps).size > 1) return;  // sudah beda-beda: percaya API
-    setNote("membaca harga tiap varian dari halaman...");
+    if (!vs.length || st.deepVariants === false || !Object.keys(variantGroups()).length) return;
+    // Harga SELALU dicocokkan dengan yang tampil di marketplace (klik tiap varian), karena harga di data API bisa berbeda
+    // (harga dasar / sebelum voucher / urutan model acak). Harga yang tidak bisa dibaca dari halaman tetap memakai data API.
+    setNote("memeriksa harga tiap varian di halaman...");
     let dv = [];
     try { dv = await deepVariants(); } catch (e) { return; }
     const key = o => Object.values(o || {}).map(x => String(x).trim().toLowerCase()).sort().join("|");
@@ -182,9 +190,14 @@ function sendBg(msg, cb, tries) {
     let changed = 0;
     for (const v of vs) {
       const m = byKey.get(key(v.options));
-      if (m && Number(String(m.price).replace(/[^\d]/g, "")) > 0) { v.price = m.price; changed++; }
+      const n = m && !/[-–]/.test(String(m.price)) ? Number(String(m.price).replace(/[^\d]/g, "")) : 0;
+      if (n > 0) { if (Number(v.price) !== n) changed++; v.price = n; v._pageChecked = true; }
     }
-    if (!changed && dv.length >= vs.length) d.variants = dv.map((x, i) => ({ ...x, image: x.image || (vs[i] && vs[i].image) || "" }));
+    if (!vs.some(v => v._pageChecked) && dv.length >= vs.length) d.variants = dv.map((x, i) => ({ ...x, image: x.image || (vs[i] && vs[i].image) || "" }));
+    const ps = (d.variants || []).map(v => Number(v.price)).filter(x => x > 0);
+    if (ps.length) d.price = Math.min(...ps);
+    d._priceFix = { checked: (d.variants || []).filter(v => v._pageChecked).length, total: (d.variants || []).length, changed };
+    (d.variants || []).forEach(v => { delete v._pageChecked; });
   }
   async function deepVariants() {
     const els = variantEls();
@@ -210,7 +223,7 @@ function sendBg(msg, cb, tries) {
         while (Date.now() - t0 < maxMs && currentPrice() === before) await sleep(60);
       }
       const sm = sr ? (document.body.innerText || "").match(sr) : null;
-      out.push({ options, price: currentPrice(), stock: disabled ? 0 : (sm ? sm[1] : ""), image: swatch || mainImage() });
+      out.push({ options, price: disabled ? "" : currentPrice(), stock: disabled ? 0 : (sm ? sm[1] : ""), image: swatch || mainImage() });
     }
     return out;
   }
@@ -381,7 +394,10 @@ function sendBg(msg, cb, tries) {
   // Header: seret untuk memindahkan panel; tombol – / + untuk mengecilkan agar tombol/teks di belakangnya bisa diakses.
   const head = document.createElement("div"); head.className = "chd";
   const minBtn = document.createElement("button"); minBtn.type = "button"; minBtn.title = "Kecilkan / besarkan";
-  head.append(title, minBtn);
+  const refBtn = document.createElement("button"); refBtn.type = "button"; refBtn.title = "Muat ulang tab ini"; refBtn.textContent = "⟳";
+  refBtn.addEventListener("click", e => { e.stopPropagation(); location.reload(); });
+  const left = document.createElement("span"); left.style.cssText = "display:flex;align-items:center;gap:6px"; left.append(title, refBtn);
+  head.append(left, minBtn);
   panel.append(head, msg);
   const store = { get: k => new Promise(r => { try { chrome.storage.local.get(k, v => r(v || {})); } catch (e) { r({}); } }), set: o => { try { chrome.storage.local.set(o); } catch (e) { /* abaikan */ } } };
   const setMin = m => { panel.classList.toggle("min", m); minBtn.textContent = m ? "+" : "–"; store.set({ panelMin: m }); };
@@ -393,7 +409,7 @@ function sendBg(msg, cb, tries) {
     return { x, y };
   };
   let drag = null;
-  head.addEventListener("pointerdown", e => { if (e.target === minBtn) return; const r = panel.getBoundingClientRect(); drag = { dx: e.clientX - r.left, dy: e.clientY - r.top }; head.setPointerCapture(e.pointerId); e.preventDefault(); });
+  head.addEventListener("pointerdown", e => { if (e.target === minBtn || e.target === refBtn) return; const r = panel.getBoundingClientRect(); drag = { dx: e.clientX - r.left, dy: e.clientY - r.top }; head.setPointerCapture(e.pointerId); e.preventDefault(); });
   head.addEventListener("pointermove", e => { if (drag) place(e.clientX - drag.dx, e.clientY - drag.dy); });
   head.addEventListener("pointerup", e => { if (!drag) return; drag = null; const r = panel.getBoundingClientRect(); store.set({ panelPos: { x: r.left, y: r.top } }); });
   head.addEventListener("dblclick", () => setMin(!panel.classList.contains("min")));
