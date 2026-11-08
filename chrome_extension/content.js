@@ -138,15 +138,15 @@ function sendBg(msg, cb, tries) {
     }
     return best ? bigImage(best) : null;
   }
-  // Harga yang TAMPIL di halaman (blok harga di bawah judul). Mengabaikan harga coret; rentang "Rp A - Rp B" dikembalikan apa adanya
-  // (artinya varian belum terpilih lengkap), sehingga pemanggil bisa menolaknya.
+  // Harga yang TAMPIL di halaman (blok harga di bawah judul). Harga coret diabaikan; rentang "Rp A - Rp B" dikembalikan apa adanya
+  // (artinya varian belum terpilih lengkap), sehingga pemanggil menolaknya.
+  const PRICE_ONE = /^Rp\s?[\d.]+(?:,\d+)?(?:\s*[-–]\s*Rp\s?[\d.]+(?:,\d+)?)?$/i;
   function currentPrice() {
     const h = document.querySelector("h1");
-    const re = /^Rp\s?[\d.]+(?:,\d+)?(?:\s*[-–]\s*Rp\s?[\d.]+(?:,\d+)?)?$/i;
     const struck = e => { for (let n = e, d = 0; n && d < 3; n = n.parentElement, d++) { const t = getComputedStyle(n).textDecorationLine || ""; if (/line-through/.test(t)) return true; } return false; };
     for (let n = h, d = 0; n && d < 8; n = n.parentElement, d++) {
-      const hit = [...n.querySelectorAll("div,span,p,b,strong")].find(e => !e.closest("#candra-panel") && e.children.length <= 1 && re.test(text(e)) && !struck(e) && e.getClientRects().length);
-      if (hit) return text(hit);
+      const hit = [...n.querySelectorAll("div,span,p,b,strong")].find(e => !e.closest("#candra-panel") && e.children.length <= 3 && PRICE_ONE.test(text(e).replace(/\s+/g, " ")) && !struck(e) && e.getClientRects().length);
+      if (hit) return text(hit).replace(/\s+/g, " ");
     }
     const scope = (h && (h.closest("section,main,div[class]") || document.body)) || document.body;
     const m = (scope.innerText || text(scope)).match(rx("price_regex") || /Rp\s?[\d.]+/i);
@@ -176,61 +176,79 @@ function sendBg(msg, cb, tries) {
     d._api = true;
     return d;
   }
-  // Harga per varian dari tampilan halaman: dipakai bila data API tidak membawa harga per varian (kosong / sama semua padahal varian banyak).
-  async function fixVariantPrices(d, st) {
-    const vs = d.variants || [];
-    if (!vs.length || st.deepVariants === false || !Object.keys(variantGroups()).length) return;
-    // Harga SELALU dicocokkan dengan yang tampil di marketplace (klik tiap varian), karena harga di data API bisa berbeda
-    // (harga dasar / sebelum voucher / urutan model acak). Harga yang tidak bisa dibaca dari halaman tetap memakai data API.
-    setNote("memeriksa harga tiap varian di halaman...");
-    let dv = [];
-    try { dv = await deepVariants(); } catch (e) { return; }
-    const key = o => Object.values(o || {}).map(x => String(x).trim().toLowerCase()).sort().join("|");
-    const byKey = new Map(dv.map(x => [key(x.options), x]));
-    let changed = 0;
-    // varian habis (tombol nonaktif di halaman, atau stok 0 di data) tidak diambil
-    const gone = v => { const m = byKey.get(key(v.options)); return !!(m && m.soldOut) || (v.stock !== "" && v.stock != null && Number(v.stock) === 0); };
-    const before = vs.length;
-    d.variants = vs.filter(v => !gone(v));
-    d._soldOutSkipped = before - d.variants.length;
-    for (const v of d.variants) {
-      const m = byKey.get(key(v.options));
-      const n = m && !/[-–]/.test(String(m.price)) ? Number(String(m.price).replace(/[^\d]/g, "")) : 0;
-      if (n > 0) { if (Number(v.price) !== n) changed++; v.price = n; v._pageChecked = true; }
+  // ---- Varian & harga SESUAI MARKETPLACE: tiap kombinasi diklik di halaman, harga yang TAMPIL dibaca, urutan = urutan di halaman.
+  // Varian habis dibuang. Produk yang variannya tidak bisa diklik/dibaca seluruhnya DILEWATI (tidak ikut tersimpan).
+  const keyOf = o => Object.values(o || {}).map(x => String(x).trim().toLowerCase()).sort().join("|");
+  const priceNum = v => { const t = String(v == null ? "" : v); return /[-–]/.test(t) ? 0 : (Number(t.replace(/[^\d]/g, "")) || 0); };
+  const isOff = el => !!el && (el.disabled || el.getAttribute("aria-disabled") === "true" || /disabled|habis|sold.?out|unavailable/i.test(el.className || ""));
+  // tunggu harga stabil (sama 3x berturut-turut) dan - bila sama dengan harga sebelumnya - beri waktu cukup agar tidak membaca harga lama
+  async function settledPrice(prev, minMs) {
+    const t0 = Date.now(); let last = null, same = 0;
+    while (Date.now() - t0 < 3000) {
+      await sleep(90);
+      const c = currentPrice();
+      if (c === last) same++; else { last = c; same = 0; }
+      const waited = Date.now() - t0;
+      if (same >= 2 && (c !== prev || waited >= minMs) && !/[-–]/.test(c) && c) return c;
     }
-    if (!d.variants.some(v => v._pageChecked) && dv.length >= vs.length) d.variants = dv.filter(x => !x.soldOut).map((x, i) => ({ ...x, image: x.image || (vs[i] && vs[i].image) || "" }));
-    const ps = (d.variants || []).map(v => Number(v.price)).filter(x => x > 0);
-    if (ps.length) d.price = Math.min(...ps);
-    d._priceFix = { checked: (d.variants || []).filter(v => v._pageChecked).length, total: (d.variants || []).length, changed };
-    (d.variants || []).forEach(v => { delete v._pageChecked; });
+    return last || "";
   }
-  async function deepVariants() {
-    const els = variantEls();
-    const keys = Object.keys(els);
-    if (!keys.length) return [];
+  async function readCombos(order, minMs) {
+    const els = variantEls(), keys = Object.keys(els);
     let list = [{}];
     for (const k of keys) list = list.flatMap(o => els[k].map(v => ({ ...o, [k]: v })));
-    list = list.slice(0, R.max_variant_combos || 30);
-    const out = [];
-    const sr = rx("stock_regex");
-    for (const combo of list) {
-      const options = {}; let disabled = false, swatch = null;
+    const idx = list.map((_, i) => i);
+    if (order === "reverse") idx.reverse();
+    const out = new Array(list.length); let prev = "";
+    for (const i of idx) {
+      const combo = list[i], options = {}; let off = false, swatch = null;
       for (const k of keys) {
         const o = combo[k]; options[k] = o.label;
-        if (o.el.disabled || o.el.getAttribute("aria-disabled") === "true" || /disabled|habis|soldout/i.test(o.el.className || "")) disabled = true;
+        if (isOff(o.el)) off = true;
         else { try { o.el.click(); } catch (e) { /* abaikan */ } }
         const im = o.el.querySelector("img");
         if (im && (im.currentSrc || im.src)) swatch = bigImage(im.currentSrc || im.src);
       }
-      {  // tunggu harga berubah (cepat bila sudah berubah), maksimal click_delay_ms
-        const before = currentPrice(), t0 = Date.now(), maxMs = R.click_delay_ms || 350;
-        await sleep(90);
-        while (Date.now() - t0 < maxMs && currentPrice() === before) await sleep(60);
-      }
-      const sm = sr ? (document.body.innerText || "").match(sr) : null;
-      out.push({ options, price: disabled ? "" : currentPrice(), stock: disabled ? 0 : (sm ? sm[1] : ""), image: swatch || mainImage(), soldOut: disabled });
+      if (off) { out[i] = { options, price: "", stock: 0, image: swatch, soldOut: true }; continue; }
+      let pr = await settledPrice(prev, minMs);
+      if (!pr || /[-–]/.test(pr)) { for (const k of keys) { try { combo[k].el.click(); } catch (e) { /* abaikan */ } } pr = await settledPrice("", minMs + 300); }  // klik ulang sekali
+      const sm = rx("stock_regex") ? (document.body.innerText || "").match(rx("stock_regex")) : null;
+      out[i] = { options, price: pr, stock: sm ? sm[1] : "", image: swatch, soldOut: false };
+      if (pr && !/[-–]/.test(pr)) prev = pr;
     }
     return out;
+  }
+  const comboCount = () => Object.values(variantEls()).reduce((n, g) => n * g.length, 1);
+  async function deepVariants() { return readCombos("forward", 650); }
+  async function verifyVariants(d, st) {
+    if (st.deepVariants === false) return { ok: true };
+    const keys = Object.keys(variantEls());
+    const apiHas = !!(d._api && d.variants && d.variants.length);
+    if (!keys.length) return apiHas ? { skip: "variasi tidak bisa diklik otomatis di halaman" } : { ok: true };
+    const total = comboCount();
+    if (total > 150) return { skip: "terlalu banyak kombinasi varian (" + total + ") untuk dicek satu per satu" };
+    setNote("memeriksa harga tiap varian di halaman (" + total + " kombinasi)...");
+    let dv = await readCombos("forward", 650);
+    const live = () => dv.filter(x => !x.soldOut);
+    // semua harga sama padahal banyak varian -> baca ulang dari urutan terbalik dengan jeda lebih lama; bila beda, pakai bacaan ulang
+    const ps = live().map(x => priceNum(x.price));
+    if (ps.length >= 3 && ps.every(x => x > 0) && new Set(ps).size === 1) {
+      setNote("harga semua varian sama, memeriksa ulang...");
+      const dv2 = await readCombos("reverse", 1000);
+      const by2 = new Map(dv2.map(x => [keyOf(x.options), x]));
+      dv = dv.map(x => { const y = by2.get(keyOf(x.options)); return y && !y.soldOut && priceNum(y.price) > 0 && priceNum(y.price) !== priceNum(x.price) ? y : x; });
+    }
+    const alive = dv.filter(x => !x.soldOut);
+    if (!alive.length) return { skip: "semua varian habis / tidak bisa dibaca" };
+    const bad = alive.filter(x => priceNum(x.price) <= 0);
+    if (bad.length) return { skip: bad.length + " varian tidak bisa diklik / harganya tidak terbaca (mis. " + Object.values(bad[0].options).join("/") + ")" };
+    const api = new Map(((d._api && d.variants) || []).map(v => [keyOf(v.options), v]));
+    d.variants = alive.map(x => { const a = api.get(keyOf(x.options)) || {}; return { options: x.options, price: priceNum(x.price), stock: a.stock !== undefined && a.stock !== "" ? a.stock : x.stock, image: a.image || x.image || "" }; })
+      .filter(v => !(v.stock !== "" && v.stock != null && Number(v.stock) === 0));
+    if (!d.variants.length) return { skip: "semua varian habis" };
+    d.price = Math.min(...d.variants.map(v => v.price));
+    d._priceFix = { total: dv.length, soldOutSkipped: dv.length - alive.length, uniform: new Set(d.variants.map(v => v.price)).size === 1 };
+    return { ok: true };
   }
   // Kesehatan pembacaan: bagian mana yang tidak terbaca (tampilan marketplace mungkin berubah).
   function health(d) {
@@ -350,11 +368,9 @@ function sendBg(msg, cb, tries) {
     await waitApi(3000);
     const d = mergeApi(extractDetail());
     const st = await new Promise(res => sendBg({ type: "settings" }, x => res((x && x.result) || {})));
-    if (d._api) await fixVariantPrices(d, st);
-    if (!d._api && st.deepVariants !== false && Object.keys(variantGroups()).length) {
-      setNote("membaca harga & foto tiap varian...");
-      try { const dv = (await deepVariants()).filter(x => !x.soldOut); if (dv.length) d.variants = dv; } catch (e) { /* tetap kirim tanpa detail varian */ }
-    }
+    let vr = {};
+    try { vr = await verifyVariants(d, st); } catch (e) { vr = { skip: "gagal membaca varian: " + (e && e.message || e) }; }
+    if (vr.skip) { d.skip_reason = vr.skip; return { state: "done", data: d, missing: [], note: "dilewati: " + vr.skip }; }
     return { state: "done", data: d, missing: health(d) };
   }
   async function runGrabList(token, limit) {
@@ -431,11 +447,10 @@ function sendBg(msg, cb, tries) {
       detailBtn.disabled = true;
       const d = mergeApi(extractDetail());
       const st = await new Promise(res => sendBg({ type: "settings" }, r => res((r && r.result) || {})));
-      if (d._api) await fixVariantPrices(d, st);
-      if (!d._api && st.deepVariants !== false && Object.keys(variantGroups()).length) {
-        msg.textContent = "Membaca harga & foto tiap varian...";
-        try { const dv = (await deepVariants()).filter(x => !x.soldOut); if (dv.length) d.variants = dv; } catch (e) { /* tetap kirim tanpa detail varian */ }
-      }
+      msg.textContent = "Membaca harga & foto tiap varian...";
+      let vr = {};
+      try { vr = await verifyVariants(d, st); } catch (e) { vr = { skip: "gagal membaca varian" }; }
+      if (vr.skip) { msg.textContent = "Dilewati (tidak dikirim): " + vr.skip; detailBtn.disabled = false; return; }
       const miss = health(d);
       const r = await send([d]);
       report(r, 1);

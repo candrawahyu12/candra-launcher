@@ -85,7 +85,7 @@ async function processItem(item, delayRange) {
   if (res.state === "done" && item.kind === "detail") {
     const r = await call("/api/capture", { items: [res.data], jobId: item.jobId });
     const f = r.failed && r.failed[0];
-    return f ? { state: "failed", note: f.error } : { state: "done", note: res.missing && res.missing.length ? "tidak terbaca: " + res.missing.join(", ") : "" };
+    return f ? { state: "failed", note: f.error } : { state: "done", note: res.data && res.data.skip_reason ? "dilewati: " + res.data.skip_reason : (res.missing && res.missing.length ? "tidak terbaca: " + res.missing.join(", ") : "") };
   }
   return res;
 }

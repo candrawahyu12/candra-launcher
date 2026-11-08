@@ -218,6 +218,22 @@ def capture_items(db: DB, items: list, rights: str = "self_responsible", job_id:
     for raw in items:
         try:
             plat, p = normalize(raw)
+            if raw.get("skip_reason") and not raw.get("partial"):  # varian tidak bisa diklik/dibaca di marketplace: produk dilewati, tidak ikut tersimpan
+                old = db.one("SELECT id, raw_data_json FROM products WHERE source_platform=? AND source_product_id=?", (plat, p["source_product_id"]))
+                if old:
+                    try:
+                        has_detail = not (json.loads(old["raw_data_json"] or "{}").get("extra") or {}).get("partial", True)
+                    except (ValueError, TypeError):
+                        has_detail = False
+                    if not has_detail:  # hanya kartu daftar (belum ada detail): keluarkan dari collection job ini
+                        db.execute("DELETE FROM collection_products WHERE collection_id=? AND product_id=?", (job["collection_id"], old["id"]))
+                db.execute("INSERT INTO scrape_job_items(job_id, input_url, product_url, canonical_id, status, attempt_count, error_code,"
+                           " error_message_safe, started_at, finished_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(job_id, canonical_id) DO UPDATE SET"
+                           " status=excluded.status, finished_at=excluded.finished_at, error_code=excluded.error_code, error_message_safe=excluded.error_message_safe",
+                           (job["id"], p["source_url"], p["source_url"], f"{plat}:{p['source_product_id']}", "skipped_filtered", 1,
+                            "VARIANT_NOT_CLICKABLE", redact(str(raw.get("skip_reason"))[:200]), now(), now()))
+                skipped += 1
+                continue
             errors, warnings = validate_product(p)
             if errors == ["INVALID_PRICE"]:       # harga belum terbaca: tetap disimpan (bisa dilengkapi ulang), jangan dibuang sebagai gagal
                 errors, warnings = [], warnings + ["PRICE_MISSING"]

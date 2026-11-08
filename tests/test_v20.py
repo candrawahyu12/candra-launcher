@@ -98,3 +98,23 @@ class V205CertTests(unittest.TestCase):
         self.assertNotIn("0812", pl["title"] + pl["description"])
         self.assertNotIn("sertifikat", pl["description"].lower())
         self.assertIn("Selamat Datang Di Toko Kami", pl["description"])
+
+
+class SkipUnclickableTest(unittest.TestCase):
+    def test_skip_reason_removes_card_and_records_skip(self):
+        import tempfile, os
+        from candra.db import DB
+        from candra import capture as cap
+        d = tempfile.mkdtemp()
+        db = DB(os.path.join(d, "t.db"))
+        card = {"url": "https://shopee.co.id/Meja-i.11.22", "title": "Meja kayu bagus", "price": "Rp100.000", "partial": True}
+        r1 = cap.capture_items(db, [card])
+        self.assertEqual(r1["saved"], 1)
+        jid = r1["jobId"]
+        det = dict(card, partial=False, skip_reason="variasi tidak bisa diklik otomatis di halaman")
+        det.pop("partial")
+        r2 = cap.capture_items(db, [det], job_id=None)
+        self.assertEqual(r2["skipped"], 1)
+        self.assertEqual(r2["saved"], 0)
+        left = db.one("SELECT COUNT(*) c FROM collection_products")["c"]
+        self.assertEqual(left, 0)
