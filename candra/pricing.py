@@ -1,6 +1,8 @@
 """Mesin harga deterministik (Decimal): persen, fixed, bertingkat (advanced), margin target; pembulatan; simulasi."""
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass, field
 from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from typing import Optional
@@ -114,12 +116,27 @@ def price_variants(product: dict, rule: PriceRule) -> list[dict]:
     return [{"variant_index": i, "cost": v["price"], "price": compute_price(v["price"], rule)} for i, v in enumerate(variants)]
 
 
-def decorate_title(title: str, prefix: str = "", suffix: str = "", max_len: int = 100) -> str:
-    """Tambah teks di awal/akhir judul (satu teks tetap, bukan spinner acak); potong di batas kata."""
+def _dedupe_words(text: str) -> str:
+    """Buang kata yang SUDAH muncul sebelumnya (tanpa membedakan huruf besar/kecil); angka/ukuran dibiarkan. Info unik tidak hilang."""
+    seen, out = set(), []
+    for w in text.split():
+        k = re.sub(r"[^\w]", "", w.lower())
+        if k and not any(c.isdigit() for c in k) and k in seen:
+            continue
+        seen.add(k)
+        out.append(w)
+    return " ".join(out)
+
+
+def decorate_title(title: str, prefix: str = "", suffix: str = "", max_len: int = 120) -> str:
+    """Tambah teks di awal/akhir judul. Bila terlalu panjang: kata yang berulang dibuang dulu (info unik tetap utuh);
+    baru bila masih lebih, dipotong di batas kata."""
     prefix, suffix = (prefix or "").strip(), (suffix or "").strip()
     fixed_len = len(prefix) + len(suffix) + (1 if prefix else 0) + (1 if suffix else 0)
     room = max(0, max_len - fixed_len)
-    base = title.strip()
+    base = re.sub(r"\s+", " ", title).strip()
+    if len(base) > room:
+        base = _dedupe_words(base)
     if len(base) > room:
         base = base[:room].rsplit(" ", 1)[0] if " " in base[:room] else base[:room]
     return " ".join(x for x in (prefix, base, suffix) if x)[:max_len]

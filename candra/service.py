@@ -262,7 +262,7 @@ class CandraService:
             r["descriptionSnippet"] = d[:160] + ("…" if len(d) > 160 else "")
             if (up_pre or up_suf):  # judul sebagaimana akan terkirim saat upload (awalan/akhiran dari Collection Settings)
                 po = (page - 1) * page_size + rows.index(r)
-                r["uploadTitle"] = decorate_title(r["title"], up_pre[po % len(up_pre)] if up_pre else "", up_suf[po % len(up_suf)] if up_suf else "", st_.get("title_max") or 100)
+                r["uploadTitle"] = decorate_title(r["title"], up_pre[po % len(up_pre)] if up_pre else "", up_suf[po % len(up_suf)] if up_suf else "", st_.get("title_max") or 120)
             if with_text:  # Bulk Editor / AI Optimize: teks lengkap (asli supplier + yang sekarang)
                 r["description"], r["descriptionOriginal"] = d, orig
         return {"total": total, "page": page, "pageSize": page_size, "items": rows}
@@ -1272,7 +1272,14 @@ class CandraService:
         b = self.db.one("SELECT config_json, target_platform FROM upload_batches WHERE id=?", (batch_id,))
         cfg = json.loads(b["config_json"] or "{}") if b else {}
         prices = [v.get("price") for v in pl.get("variants", []) if v.get("price")]
-        return {"payload": pl, "errors": json.loads(it["validation_errors_json"] or "[]"), "marketplace": cfg.get("marketplace") or (b or {}).get("target_platform"),
+        from .analyzer import SUPPLIER_KINDS
+        body = (pl.get("_desc") or {}).get("body") or ""
+        try:
+            fnd = analyze_text((pl.get("title") or "") + "\n" + body, cfg.get("shop_names") or [])["findings"]
+        except Exception:  # noqa: BLE001
+            fnd = []
+        leaks = [{"type": f["type"], "match": f["match"]} for f in fnd if f["type"] in SUPPLIER_KINDS or f["type"] == "shop_name"][:30]
+        return {"payload": pl, "leaks": leaks, "errors": json.loads(it["validation_errors_json"] or "[]"), "marketplace": cfg.get("marketplace") or (b or {}).get("target_platform"),
                 "priceMin": min(prices) if prices else None, "priceMax": max(prices) if prices else None,
                 "status": it["status"], "sent": False}
 

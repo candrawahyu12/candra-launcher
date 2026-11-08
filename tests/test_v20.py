@@ -118,3 +118,38 @@ class SkipUnclickableTest(unittest.TestCase):
         self.assertEqual(r2["saved"], 0)
         left = db.one("SELECT COUNT(*) c FROM collection_products")["c"]
         self.assertEqual(left, 0)
+
+
+class TitleNoCutTest(unittest.TestCase):
+    def test_long_title_dedupes_repeated_words_before_cutting(self):
+        from candra.pricing import decorate_title
+        t = ("Meja nakas minimalis Meja Nakas Bedside Table Lemari Nakas meja nakas kayu Meja Samping Meja Nakas Putih 2 dan 3 Laci "
+             "Warna Putih Kayu Natural Meja Sudut Multifungsi")
+        r = decorate_title(t, "NEW", "Premium", 120)
+        self.assertLessEqual(len(r), 120)
+        for w in ("minimalis", "Bedside", "Lemari", "Samping", "Natural", "Sudut", "Multifungsi", "Laci", "Warna"):
+            self.assertIn(w, r)   # kata unik tidak hilang
+        self.assertTrue(r.startswith("NEW ") and r.endswith(" Premium"))
+        self.assertEqual(r.lower().count("nakas"), 1)
+
+    def test_short_title_untouched_and_numbers_kept(self):
+        from candra.pricing import decorate_title
+        self.assertEqual(decorate_title("Rak 2 Susun 40 cm 40 cm", "", "", 120), "Rak 2 Susun 40 cm 40 cm")
+
+    def test_payload_exposes_description_parts(self):
+        import tempfile, os
+        from candra.service import CandraService
+        import tests.test_qlobot_flow as T
+        d = tempfile.mkdtemp()
+        svc = CandraService(os.path.join(d, "c.db"), d)
+        svc.create_scrape_job(source_platform="csv_feed", input_mode="csv", inputs={"csv_text": T.SAMPLE}, collection_name="K", rights_declaration="supplier_permitted")
+        svc.jobs.run_pending()
+        cid = svc.list_collections()[0]["id"]
+        svc.set_collection_settings(cid, {"desc_prefix": ["AWAL"], "desc_suffix": ["AKHIR"]})
+        pv = svc.preview_upload(collection_id=cid, target="sandbox", selection={"mode": "all"}, config={"marketplace": "shopee"})
+        pid = pv["items"][0]["productId"]
+        sim = svc.simulate_listing(pv["batchId"], pid)
+        dd = sim["payload"]["_desc"]
+        self.assertEqual((dd["prefix"], dd["suffix"]), ("AWAL", "AKHIR"))
+        self.assertTrue(sim["payload"]["description"].startswith("AWAL") and sim["payload"]["description"].endswith("AKHIR"))
+        self.assertIn(dd["body"], sim["payload"]["description"])

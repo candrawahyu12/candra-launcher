@@ -182,9 +182,9 @@ def _validate_config(cfg: dict, target: str) -> dict:
     out.setdefault("template", "generic")
     if target == "export_csv":
         tpl = load_template(out["template"])
-        out.setdefault("title_max", tpl.get("title_max", 100))
+        out.setdefault("title_max", tpl.get("title_max", 120))
         out.setdefault("desc_max", tpl.get("desc_max", 3000))
-    out.setdefault("title_max", 100)
+    out.setdefault("title_max", 120)
     out.setdefault("desc_max", 3000)
     for k in ("title_max", "desc_max"):
         if not isinstance(out[k], int) or out[k] < 10:
@@ -264,7 +264,8 @@ def build_payload(db: DB, product_id: int, target: str, cfg: dict, index: int = 
             opts = [opts] if opts.strip() else []
         return opts[index % len(opts)] if opts else ""
     title = decorate_title(title, pick("title_prefix"), pick("title_suffix"), cfg["title_max"])
-    desc = decorate_description(desc, pick("desc_prefix"), pick("desc_suffix"))
+    desc_body, _dp, _ds = desc, pick("desc_prefix"), pick("desc_suffix")
+    desc = decorate_description(desc, _dp, _ds)
     if len(desc) > cfg["desc_max"]:
         errors.append("DESC_TOO_LONG")
 
@@ -371,7 +372,7 @@ def build_payload(db: DB, product_id: int, target: str, cfg: dict, index: int = 
     known = [v["stock"] for v in out_variants if v["stock"] is not None]
     if cfg.get("skip_zero_stock") and known and all(x == 0 for x in known):
         errors.append("ZERO_STOCK_SKIPPED")  # "Lewati Product Stok Kosong": tidak dikirim, bukan kesalahan data
-    payload = {"sku_parent": parent_sku, "title": title, "description": desc, "brand": NO_BRAND, "cod_enabled": False, "category": category, "attributes": attrs,
+    payload = {"sku_parent": parent_sku, "title": title, "description": desc, "_desc": {"prefix": _dp, "body": desc_body, "suffix": _ds}, "brand": NO_BRAND, "cod_enabled": False, "category": category, "attributes": attrs,
                "images": [i["source_url"] for i in images],
                "processed_images": [assets[i["id"]]["local_path"] for i in images if i["id"] in assets and assets[i["id"]]["local_path"]], "variants": out_variants, "source_url": p["source_url"],
                "product_id": product_id, "ship_days": cfg.get("ship_days"),

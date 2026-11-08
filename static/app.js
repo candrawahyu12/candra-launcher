@@ -532,6 +532,7 @@ function settingsForm(init) {
     step: h("input", { type: "number", value: pr.round_step ?? 0, style: "width:90px" }), rmode: h("select", {}, ...[["up", "ke atas"], ["nearest", "terdekat"], ["down", "ke bawah"]].map(([k, l]) => h("option", { value: k }, l))),
     tp: h("textarea", { style: "min-height:60px" }), ts: h("textarea", { style: "min-height:60px" }), dp: h("textarea", { style: "min-height:60px" }), ds: h("textarea", { style: "min-height:60px" }),
     ship: h("input", { type: "number", min: 1, max: 90, value: init.ship_days ?? "", style: "width:80px" }),
+    tmax: h("input", { type: "number", min: 20, max: 255, value: init.title_max ?? 120, style: "width:90px", title: "Shopee ±120, TikTok Shop 255, Tokopedia ±70 (perkiraan umum; cocokkan dengan Seller Center)" }),
     skip: h("input", { type: "checkbox", checked: !!init.skip_zero_stock }), smode: h("select", {}, h("option", { value: "follow" }, "Ikuti stok data"), h("option", { value: "fixed" }, "Stok tetap")), fstock: h("input", { type: "number", value: init.fixed_stock ?? 100, style: "width:90px" }),
   };
   f.mode.value = pr.mode || "percent"; f.rmode.value = pr.round_mode || "up"; f.smode.value = init.stock_mode || "follow";
@@ -545,6 +546,7 @@ function settingsForm(init) {
     if (rule.mode === "tiers") rule.tiers = split(f.tiers.value).map(l => { const m = l.match(/^(\d+)\s*-\s*(\d*)\s*:\s*([\d.]+)$/); if (!m) throw new Error("Format tingkat salah: " + l); return { min: +m[1], max: m[2] ? +m[2] : null, percent: +m[3], fixed: 0 }; });
     const s = { price_rule: rule, title_prefix: split(f.tp.value), title_suffix: split(f.ts.value), desc_prefix: split(f.dp.value), desc_suffix: split(f.ds.value), skip_zero_stock: f.skip.checked, stock_mode: f.smode.value, require_processed_images: false };
     if (f.ship.value) s.ship_days = +f.ship.value;
+    s.title_max = Math.min(255, Math.max(20, +f.tmax.value || 120));
     s.fixed_stock = +f.fstock.value;
     return s;
   };
@@ -556,6 +558,7 @@ function settingsForm(init) {
     h("div", { class: "small mut gap" }, "Isian di bawah dipakai hanya bila kotak di atas TIDAK dicentang (hitung margin sederhana):"),
     h("div", { class: "row" }, h("label", {}, "Komisi + layanan (%)", f.comm), h("label", {}, "Biaya tetap per pesanan (Rp)", f.fcost)),
     h("h3", { class: "gap" }, "Tambahan judul & deskripsi"), h("div", { class: "small mut" }, "Beberapa opsi (satu per baris) dipakai bergiliran antar produk — deterministik, bukan acak."),
+    h("div", { class: "row" }, h("label", {}, "Maks. karakter judul", f.tmax), h("span", { class: "small mut" }, "Judul yang lebih panjang: kata yang berulang dibuang dulu, kata unik tidak dipotong.")),
     h("div", { class: "row" }, h("label", { class: "grow" }, "Awalan judul", f.tp), h("label", { class: "grow" }, "Akhiran judul", f.ts)), h("div", { class: "row gap" }, h("label", { class: "grow" }, "Awalan deskripsi", f.dp), h("label", { class: "grow" }, "Akhiran deskripsi", f.ds)),
     h("h3", { class: "gap" }, "Pengiriman & stok"), h("div", { class: "row" }, h("label", {}, "Dikirim dalam (hari)", f.ship), h("label", {}, "Stok", f.smode), h("label", { title: "Dipakai bila Stok = Stok tetap, atau stok produk tidak terbaca dari sumber" }, "Jumlah (stok tetap / cadangan)", f.fstock), h("label", { class: "chk" }, f.skip, "Lewati produk stok kosong")),
     h("div", { class: "small mut" }, "Merek selalu \"Tanpa Merek\" dan COD selalu nonaktif — aturan tetap, tidak bisa diubah."));
@@ -919,6 +922,27 @@ function simDialog(pv, productId, mk, back) {
       ...(r.errors || []).map(e => chk(false, "Galat preview: " + errT(e)))];
     const photos = (pl.images || []).slice(0, 9).map(u => h("img", { src: u, style: "width:84px;height:84px;object-fit:cover;border-radius:6px;margin:0 6px 6px 0", referrerpolicy: "no-referrer" }));
     const priceTxt = r.priceMin ? (r.priceMin === r.priceMax ? rp(r.priceMin) : rp(r.priceMin) + " – " + rp(r.priceMax)) : "-";
+    const dd = pl._desc || { prefix: "", body: pl.description || "", suffix: "" };
+    const ta = h("textarea", { style: "width:100%;min-height:200px;font-size:13px;white-space:pre-wrap" }); ta.value = dd.body || "";
+    const cnt = h("span", { class: "small mut" }), delTxt = h("input", { placeholder: "kata/kalimat yang mau dihapus (semua baris yang memuatnya)", style: "flex:1;min-width:200px" });
+    const upd = () => { cnt.textContent = ta.value.length + " karakter (belum termasuk awalan/akhiran)"; };
+    ta.addEventListener("input", upd); upd();
+    let orig = ta.value;
+    const saveBtn = h("button", { class: "pri", onclick: () => guard(async () => {
+      if (!ta.value.trim()) throw new Error("Deskripsi tidak boleh kosong");
+      await api("/api/products/" + productId + "/edit", { description: ta.value });
+      const np = await api("/api/batches/" + pv.batchId + "/preview", {});   // hitung ulang preview agar status & kode konfirmasi ikut diperbarui
+      Object.assign(pv, np); orig = ta.value;
+      toast("Deskripsi disimpan. Pemeriksaan diperbarui."); closeModal(); simDialog(pv, productId, mk, back);
+    }) }, "💾 Simpan deskripsi");
+    const descEditor = h("div", { style: "margin-bottom:8px" },
+      dd.prefix ? h("div", { class: "small mut", style: "white-space:pre-wrap;border-left:3px solid var(--line,#2a3142);padding-left:8px;margin-bottom:4px" }, "Awalan (dari Collection Settings): " + dd.prefix) : null,
+      ta,
+      dd.suffix ? h("div", { class: "small mut", style: "white-space:pre-wrap;border-left:3px solid var(--line,#2a3142);padding-left:8px;margin-top:4px" }, "Akhiran (dari Collection Settings): " + dd.suffix) : null,
+      (r.leaks && r.leaks.length) ? h("div", { class: "note gap" }, h("b", {}, "Masih terdeteksi (klik untuk mengisi kotak hapus): "), ...r.leaks.map(l => h("button", { class: "sm", style: "margin:2px", onclick: () => { delTxt.value = l.match; } }, l.match.slice(0, 40) + " · " + l.type))) : null,
+      h("div", { class: "row gap", style: "flex-wrap:wrap;align-items:center" }, delTxt,
+        h("button", { onclick: () => { const q = delTxt.value.trim().toLowerCase(); if (!q) return; const keep = ta.value.split("\n").filter(l => !l.toLowerCase().includes(q)); toast((ta.value.split("\n").length - keep.length) + " baris dihapus (belum disimpan)"); ta.value = keep.join("\n"); delTxt.value = ""; upd(); } }, "Hapus baris itu"),
+        h("button", { onclick: () => { ta.value = orig; upd(); } }, "Batalkan perubahan"), cnt, saveBtn));
     modal("Simulator " + rule.name + " — yang akan masuk ke form", h("div", {},
       h("div", { class: "note" }, "Ini TAMPILAN SIMULASI dari data di CANDRA (belum dikirim ke mana pun). Batas karakter/foto adalah perkiraan umum; cocokkan dengan Seller Center terbaru."),
       h("div", { style: "border:2px solid " + rule.color + ";border-radius:10px;padding:14px;margin-top:10px" },
@@ -927,7 +951,8 @@ function simDialog(pv, productId, mk, back) {
         h("div", { class: "small mut" }, "Nama produk"), h("div", { style: "font-weight:700;font-size:15px;margin-bottom:8px" }, pl.title),
         h("div", { class: "small mut" }, "Kategori"), h("div", { style: "margin-bottom:8px" }, pl.category && pl.category.label ? pl.category.label : "— belum dipilih —"),
         h("div", { class: "small mut" }, "Harga"), h("div", { style: "font-weight:700;margin-bottom:8px" }, priceTxt),
-        h("div", { class: "small mut" }, "Deskripsi produk"), h("div", { style: "white-space:pre-wrap;max-height:200px;overflow:auto;border:1px solid var(--line,#2a3142);border-radius:6px;padding:8px;margin-bottom:8px;font-size:13px" }, pl.description),
+        h("div", { class: "small mut" }, "Deskripsi produk — bisa Anda ubah / hapus bagian yang belum terdeteksi, lalu Simpan"),
+        descEditor,
         h("div", { class: "small mut" }, rule.varLabel + " (" + vs.length + ")"),
         h("div", { style: "overflow:auto;max-height:220px;margin-bottom:8px" }, h("table", { class: "small" }, h("thead", {}, h("tr", {}, h("th", {}, "Opsi"), h("th", {}, "SKU"), h("th", {}, "Harga"), h("th", {}, "Stok"), h("th", {}, rule.weightLabel))),
           h("tbody", {}, ...vs.map(v => h("tr", {}, h("td", {}, Object.values(v.options || {}).join(" / ") || "-"), h("td", {}, v.sku), h("td", {}, rp(v.price)), h("td", {}, v.stock == null ? "?" : v.stock), h("td", {}, v.weight_gram || "?")))))),
