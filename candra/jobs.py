@@ -278,7 +278,7 @@ class JobManager:
             return 1
 
     def items(self, job_id: int, only_failed: bool = False) -> list[dict]:
-        sql = "SELECT * FROM scrape_job_items WHERE job_id=?" + (" AND status='failed'" if only_failed else "") + " ORDER BY id"
+        sql = "SELECT * FROM scrape_job_items WHERE job_id=?" + (" AND status IN ('failed','skipped_filtered')" if only_failed else "") + " ORDER BY id"
         return self.db.query(sql, (job_id,))
 
     def cancel(self, job_id: int) -> None:

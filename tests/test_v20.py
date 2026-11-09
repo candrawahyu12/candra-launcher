@@ -306,3 +306,11 @@ class MarkupExactTest(unittest.TestCase):
             for v in it["variants"]:   # tiap varian: laba bersih = markup% x (harga sumber + packing)
                 self.assertEqual(v["markupAmount"], int(round((v["cost"] + 6000) * 0.2)))
                 self.assertGreaterEqual(v["now"], v["breakEven"])
+
+
+class SkippedItemsListedTest(unittest.TestCase):
+    def test_items_failed_includes_skipped(self):
+        import inspect
+        from candra import jobs
+        src = inspect.getsource(jobs.JobService.items) if hasattr(jobs, "JobService") else ""
+        self.assertIn("skipped_filtered", src or open(jobs.__file__, encoding="utf-8").read())

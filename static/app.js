@@ -167,7 +167,7 @@ async function grabResult(box) {
         "Antrean Chrome — selesai " + (st.queue ? st.queue.done : 0) + ", menunggu " + (st.queue ? st.queue.pending + st.queue.working : 0) + ", gagal " + (st.queue ? st.queue.failed : 0) + "."),
       h("div", { class: "small mut" }, "Success: " + st.succeeded + " · Failed: " + st.failed + " · Skipped: " + st.skipped + " · Target: " + st.attempted),
       st.collectionStatus !== "staging" && h("div", { class: "note gap" }, "Sudah tersimpan di Collections."),
-      items.length ? h("details", { class: "gap" }, h("summary", {}, items.length + " item gagal"), h("table", {}, ...items.map(i => h("tr", {}, h("td", {}, i.canonical_id), h("td", {}, i.error_code), h("td", { class: "small mut" }, i.error_message_safe))))) : null,
+      items.length ? h("details", { class: "gap" }, h("summary", {}, items.length + " item gagal / dilewati (klik untuk lihat alasannya)"), h("table", {}, ...items.map(i => h("tr", {}, h("td", {}, i.canonical_id), h("td", {}, i.status === "skipped_filtered" ? "DILEWATI · " + (i.error_code || "") : i.error_code), h("td", { class: "small mut" }, i.error_message_safe))))) : null,
       h("div", { class: "gap" }, table)));
   };
   await draw(); clearInterval(grabResult.t); grabResult.t = setInterval(() => guard(draw), 3000); timers.push(grabResult.t);

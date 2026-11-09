@@ -62,9 +62,15 @@ async function tabSend(tabId, m) {
   throw new Error("skrip halaman tidak merespons (muat ulang ekstensi lalu halaman Shopee/Tokopedia)");
 }
 async function openInGrabTab(url) {
+  // Halaman dibuka di JENDELA KECIL TERPISAH tanpa merebut fokus: jendela Chrome utama Anda tetap bebas dipakai.
+  // (Jangan di-minimize: Chrome menahan halaman yang disembunyikan sehingga harga varian tidak bisa dibaca benar.)
   if (grabTab != null) { try { await chrome.tabs.get(grabTab); } catch (_) { grabTab = null; } }
-  if (grabTab == null) { const t = await chrome.tabs.create({ url, active: true }); grabTab = t.id; }
-  else await chrome.tabs.update(grabTab, { url, active: true });
+  if (grabTab == null) {
+    let t = null;
+    try { const w = await chrome.windows.create({ url, type: "popup", focused: false, width: 560, height: 760, left: 40, top: 40 }); t = w.tabs && w.tabs[0]; } catch (_) { t = null; }
+    if (!t) t = await chrome.tabs.create({ url, active: false });
+    grabTab = t.id;
+  } else await chrome.tabs.update(grabTab, { url });
   await waitTabComplete(grabTab, 60000);
 }
 async function processItem(item, delayRange) {
