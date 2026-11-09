@@ -250,8 +250,10 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
         def route_post(self, path: str, b: dict):
             if m := re.fullmatch(r"/api/collections/(\d+)/apply-prices", path):
                 return svc.apply_recommended_prices(int(m[1]), b.get("marketplace", ""), float(b.get("targetMarginPct", 10)), float(b.get("extraCost", 0) or 0),
-                                                   bool(b.get("useAiPrices")), b.get("productIds"), int(b.get("roundStep", 100)), apply=b.get("apply") is True,
-                                                   markup_fixed=float(b.get("markupFixed", 0) or 0))
+                                                   bool(b.get("useAiPrices")), b.get("productIds"), (int(b["roundStep"]) if b.get("roundStep") else None), apply=b.get("apply") is True,
+                                                   markup_fixed=float(b.get("markupFixed", 0) or 0),
+                                                   markup_pct=(float(b["markupPct"]) if b.get("markupPct") not in (None, "") else None),
+                                                   markup_mode=str(b.get("markupMode") or "cost"), include_fees=bool(b.get("includeFees", True)))
             if m := re.fullmatch(r"/api/collections/(\d+)/clear-prices", path):
                 return svc.clear_price_overrides(int(m[1]), b.get("marketplace") or None)
             if path == "/api/storage/limit":
@@ -316,7 +318,9 @@ def make_handler(svc: CandraService, port: int, updater: Updater = None):
                 return svc.price_advice(int(m[1]), marketplace=b.get("marketplace") or None, commission_pct=b.get("commissionPct"),
                                         fixed_cost=b.get("fixedCost"), target_margin_pct=float(b.get("targetMarginPct", 10)),
                                         extra_cost=float(b.get("extraCost") or 0), use_ai_prices=bool(b.get("useAiPrices")),
-                                        product_ids=b.get("productIds"), markup_fixed=float(b.get("markupFixed", 0) or 0))
+                                        product_ids=b.get("productIds"), markup_fixed=float(b.get("markupFixed", 0) or 0),
+                                                   markup_pct=(float(b["markupPct"]) if b.get("markupPct") not in (None, "") else None),
+                                                   markup_mode=str(b.get("markupMode") or "cost"), include_fees=bool(b.get("includeFees", True)))
             if path == "/api/fees/profile":
                 return svc.set_fee_profile(b.get("marketplace", ""), b.get("components"), b.get("overrides"), bool(b.get("verified")), b.get("source", ""), bool(b.get("aiResearched")), b.get("fileInfo"))
             if path == "/api/fees/reset":

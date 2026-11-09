@@ -90,23 +90,37 @@ def apply_ending(price, ending) -> int:
     return p if p >= price else p + mod
 
 
-def compute_price(cost, rule: PriceRule) -> int:
-    cost = D(cost)
-    if cost <= 0:
-        raise PricingError("harga sumber harus > 0")
+def rule_markup(cost, rule: PriceRule):
+    """(laba_markup, packing): laba yang Anda inginkan dan biaya tambahan (packing) dari aturan harga.
+    Markup % dihitung dari MODAL = harga sumber + packing (Tambahan Rp). Contoh: modal 373.000 + packing 0, markup 20% -> laba 74.600."""
+    cost, extra = D(cost), D(rule.extra_fixed)
+    base = cost + extra
     if rule.mode == "percent":
-        price = cost * (1 + D(rule.percent) / 100)
+        laba = base * D(rule.percent) / 100
     elif rule.mode == "fixed":
-        price = cost + D(rule.fixed)
+        laba = D(rule.fixed)
     elif rule.mode == "tiers":
         tier = next((t for t in sorted(rule.tiers, key=lambda t: t["min"])
                      if cost >= D(t["min"]) and (t.get("max") is None or cost < D(t["max"]))), None)
         if tier is None:
             raise PricingError(f"tidak ada tier untuk harga {cost}")
-        price = cost * (1 + D(tier.get("percent", 0)) / 100) + D(tier.get("fixed", 0))
+        laba = base * D(tier.get("percent", 0)) / 100 + D(tier.get("fixed", 0))
+    else:  # margin (laba % dari harga jual): laba = harga - biaya - komisi, dihitung lewat compute_price
+        laba = D(compute_price(cost, PriceRule.from_dict({**rule.__dict__, "round_step": 0, "ending": "", "extra_fixed": 0, "min_price": 0})) - int(cost))
+    return int(laba.quantize(Decimal(1), rounding=ROUND_HALF_UP)), int(extra)
+
+
+def compute_price(cost, rule: PriceRule) -> int:
+    """Harga jual TANPA biaya platform: (modal + packing) + markup, lalu pembulatan & angka terakhir."""
+    cost = D(cost)
+    if cost <= 0:
+        raise PricingError("harga sumber harus > 0")
+    if rule.mode in ("percent", "fixed", "tiers"):
+        laba, extra = rule_markup(cost, rule)
+        price = cost + D(extra) + D(laba)
     else:  # margin: harga = (biaya + biaya_tetap) / (1 - komisi - margin)
         price = (cost + D(rule.fixed_cost)) / (1 - D(rule.commission_pct) / 100 - D(rule.margin_pct) / 100)
-    price += D(rule.extra_fixed)
+        price += D(rule.extra_fixed)
     price = _round(price, rule.round_step, rule.round_mode)
     if price < D(rule.min_price):
         price = _round(D(rule.min_price), rule.round_step, "up")

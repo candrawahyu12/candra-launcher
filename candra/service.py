@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
 import os
 import re
 import sqlite3
@@ -19,7 +20,7 @@ from .db import DB
 from .exporter import export_csv, list_templates
 from .jobs import RIGHTS, JobError, JobManager, parse_url_lines
 from .optimizer import AIProvider, GeminiProvider, gemini_search, RuleBasedProvider, optimize_product, similarity, validate_ai_output
-from .pricing import PriceRule, PricingError, compute_price, decorate_title, simulate, apply_ending
+from .pricing import PriceRule, PricingError, compute_price, rule_markup, D, decorate_title, simulate, apply_ending
 from .uploader import (OK_RIGHTS, AssistedFillConnector, ExportFileConnector, OfficialApiConnector, SandboxConnector, UploadError, UploadManager,
                        build_payload, _validate_config)
 from . import aierr, attributes, feeai, feecat, feetable, filetext, studio
@@ -2642,16 +2643,43 @@ class CandraService:
                     mapped += 1
         return {"mapped": mapped, "total": len(todo), "note": note}
 
+    @staticmethod
+    def _advice_calc(vc, comps, ovs, cat, extra_cost, margin, markup_fixed, ending, round_step, markup_pct=None, markup_mode="cost",
+                     include_fees=True):
+        """Satu rumus harga untuk dialog Harga & Kompetitor dan 'SIMPAN harga rekomendasi'.
+        markup_pct None -> cara lama (margin % dari harga jual). markup_mode 'cost': laba = markup% x MODAL (harga sumber + packing) + Rp tetap;
+        'margin': laba = margin% x harga jual (rumus BigSeller). include_fees: tambahkan SEMUA biaya platform di atas modal + laba.
+        Mengembalikan (harga, laba_rupiah_target)."""
+        modal = D(vc) + D(extra_cost)
+        if markup_pct is None:
+            m_, laba = margin, D(markup_fixed)
+        elif markup_mode == "margin":
+            m_, laba = float(markup_pct), D(markup_fixed)
+        else:
+            m_, laba = 0.0, modal * D(markup_pct) / 100 + D(markup_fixed)
+        laba_i = int(laba.quantize(Decimal(1), rounding=ROUND_HALF_UP))
+        if include_fees:
+            price = feemod.solve_price(vc, comps, ovs, cat, m_, extra_cost, round_step, laba_i, ending)
+        else:
+            raw = (modal + laba) / (1 - D(m_) / 100)
+            step = max(1, int(round_step or 1))
+            price = apply_ending(int((raw / step).to_integral_value(rounding=ROUND_CEILING)) * step, ending)
+        return int(price), laba_i
+
     def price_advice(self, collection_id: int, *, marketplace: Optional[str] = None, commission_pct: Optional[float] = None,
                      fixed_cost: Optional[float] = None, target_margin_pct: float = 10.0, extra_cost: float = 0.0,
-                     use_ai_prices: bool = False, product_ids: Optional[list[int]] = None, round_step: int = 100,
-                     markup_fixed: float = 0.0) -> dict:
+                     use_ai_prices: bool = False, product_ids: Optional[list[int]] = None, round_step: Optional[int] = None,
+                     markup_fixed: float = 0.0, markup_pct: Optional[float] = None, markup_mode: str = "cost",
+                     include_fees: bool = True) -> dict:
         """Harga jual aman = harga terkecil dengan laba bersih >= margin% SETELAH semua biaya platform (profil `marketplace`,
         termasuk tarif dinamis per kategori & batas maksimum) + extra_cost (packing dll). Dibandingkan dengan harga kompetitor."""
         col = self._need_collection(collection_id)
         cfg = json.loads(col["settings_json"] or "{}")
         rule = PriceRule.from_dict(cfg.get("price_rule"))
+        round_step = max(1, int(round_step if round_step is not None else (rule.round_step or 1)))  # bawaan: pembulatan yang sama dengan aturan harga
         margin = float(target_margin_pct)
+        if markup_pct is not None and (markup_pct < 0 or markup_pct > 1000 or (markup_mode == "margin" and markup_pct >= 80)):
+            raise ServiceError("markup tidak valid")
         if not 0 <= margin < 80 or extra_cost < 0:
             raise ServiceError("margin/biaya tambahan tidak valid")
         if marketplace:
@@ -2684,14 +2712,14 @@ class CandraService:
                 if ov:
                     now_price = int(ov["price"])
                 elif fee_aware:
-                    now_price = feemod.solve_price(cost, comps, ovs, cat, 0.0, 0, max(1, int(rule.round_step or 1)),
-                                                   max(0, compute_price(cost, r0) - int(round(float(cost)))), rule.ending)
+                    mk_rule, pk_rule = rule_markup(cost, rule)
+                    now_price = feemod.solve_price(cost, comps, ovs, cat, 0.0, pk_rule, max(1, int(rule.round_step or 1)), max(0, mk_rule), rule.ending)
                 else:
                     now_price = compute_price(cost, rule) if rule_set else None
             except (PricingError, feemod.FeeError):
                 now_price = None
             try:
-                floor = feemod.solve_price(cost, comps, ovs, cat, margin, extra_cost, round_step, markup_fixed, rule.ending)
+                floor, laba_t = self._advice_calc(cost, comps, ovs, cat, extra_cost, margin, markup_fixed, rule.ending, round_step, markup_pct, markup_mode, include_fees)
                 even = feemod.solve_price(cost, comps, ovs, cat, 0.0, extra_cost, 1)
             except feemod.FeeError:
                 rows.append({"id": p["id"], "title": title[:70], "verdict": "BIAYA_TERLALU_BESAR"})
@@ -2716,31 +2744,32 @@ class CandraService:
                 suggested = max(floor, apply_ending(int(-(-min(now_price or med, med) // round_step) * round_step), rule.ending))
             else:
                 suggested = floor
-            at_floor = feemod.net_profit(floor, cost, comps, ovs, cat, extra_cost)
+            at_floor = feemod.net_profit(floor, cost, comps, ovs, cat, extra_cost) if include_fees else None
             var_rows = []
             for v_ in self.db.query("SELECT price_original, option_values_json FROM product_variants WHERE product_id=? ORDER BY id LIMIT 60", (p["id"],)):
                 vc = v_["price_original"]
                 if not vc:
                     continue
                 try:
-                    vf = feemod.solve_price(vc, comps, ovs, cat, margin, extra_cost, round_step, markup_fixed, rule.ending)
+                    vf, vlaba = self._advice_calc(vc, comps, ovs, cat, extra_cost, margin, markup_fixed, rule.ending, round_step, markup_pct, markup_mode, include_fees)
                     var_rows.append({"label": " / ".join(str(x) for x in json.loads(v_["option_values_json"] or "{}").values()) or "-", "cost": vc,
-                                     "price": vf, "breakdown": feemod.net_profit(vf, vc, comps, ovs, cat, extra_cost)})
+                                     "price": vf, "markupAmount": vlaba, "breakdown": feemod.net_profit(vf, vc, comps, ovs, cat, extra_cost) if include_fees else None})
                 except feemod.FeeError:
                     continue
             rows.append({"id": p["id"], "title": title[:70], "cost": cost, "variants": var_rows, "feeCategory": cat if len(cat) < 160 else "", "feeRates": feemod.match_info(comps, ovs, cat), "feeSource": cat_src, "priceNow": now_price, "priceSource": price_source, "floorForMargin": floor,
                          "breakEven": even, "compMin": cmin, "compMedian": med, "compCount": len(comps_p), "aiHidden": 0 if use_ai_prices else ai_n,
-                         "verdict": verdict, "suggested": suggested, "atFloor": at_floor,
+                         "verdict": verdict, "suggested": suggested, "atFloor": at_floor, "markupAmount": laba_t, "modal": float(cost) + float(extra_cost), "priceBeforeFees": float(cost) + float(extra_cost) + laba_t,
                          "nowBreakdown": feemod.net_profit(now_price, cost, comps, ovs, cat, extra_cost) if now_price else None})
         summary: dict[str, int] = {}
         for r in rows:
             summary[r["verdict"]] = summary.get(r["verdict"], 0) + 1
-        return {"marketplace": marketplace, "feeStatus": fee_status, "ruleSet": rule_set, "targetMarginPct": margin, "extraCost": extra_cost,
+        return {"marketplace": marketplace, "feeStatus": fee_status, "ruleSet": rule_set, "targetMarginPct": margin, "extraCost": extra_cost, "markupPct": markup_pct, "markupMode": markup_mode, "includeFees": include_fees,
                 "feeSet": any(c["value"] for c in comps if c["enabled"]), "summary": summary, "items": rows}
 
     def apply_recommended_prices(self, collection_id: int, marketplace: str, target_margin_pct: float = 10.0, extra_cost: float = 0.0,
-                                 use_ai_prices: bool = False, product_ids: Optional[list[int]] = None, round_step: int = 100,
-                                 apply: bool = False, markup_fixed: float = 0.0) -> dict:
+                                 use_ai_prices: bool = False, product_ids: Optional[list[int]] = None, round_step: Optional[int] = None,
+                                 apply: bool = False, markup_fixed: float = 0.0, markup_pct: Optional[float] = None, markup_mode: str = "cost",
+                                 include_fees: bool = True) -> dict:
         """Hitung harga jual per varian = harga terkecil yang memberi laba sesuai target SETELAH semua biaya platform marketplace itu
         (bila ada harga pembanding: tidak di bawah batas itu, mendekati median pembanding). apply=True menyimpannya sebagai harga yang
         dipakai upload/export untuk varian itu (menggantikan aturan harga). Selalu bisa dikembalikan lewat clear_price_overrides."""
@@ -2751,7 +2780,9 @@ class CandraService:
             raise ServiceError("margin/biaya tambahan tidak valid")
         prof = self.get_fee_profile(marketplace)
         comps, ovs = prof["components"], prof.get("overrides") or []
-        ending = PriceRule.from_dict(json.loads(self._need_collection(collection_id)["settings_json"] or "{}").get("price_rule")).ending
+        _rule = PriceRule.from_dict(json.loads(self._need_collection(collection_id)["settings_json"] or "{}").get("price_rule"))
+        ending = _rule.ending
+        round_step = max(1, int(round_step if round_step is not None else (_rule.round_step or 1)))
         changes, skipped = [], 0
         for p in self._products_in(collection_id, product_ids)[:500]:
             title = self._eff(p)[0]
@@ -2771,7 +2802,7 @@ class CandraService:
                 if not c:
                     continue
                 try:
-                    floor = feemod.solve_price(c, comps, ovs, cat, margin, extra_cost, round_step, markup_fixed, ending)
+                    floor, _laba = self._advice_calc(c, comps, ovs, cat, extra_cost, margin, markup_fixed, ending, round_step, markup_pct, markup_mode, include_fees)
                 except feemod.FeeError:
                     skipped += 1
                     continue

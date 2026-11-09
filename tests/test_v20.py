@@ -204,3 +204,89 @@ class PriceEndingTest(unittest.TestCase):
                     seen += 1
                     self.assertEqual(v["price"] % 1000, 900, v)
         self.assertGreater(seen, 0)
+
+
+class MarkupExactTest(unittest.TestCase):
+    """Markup % yang diketik pengguna harus PERSIS menjadi laba: tidak ada angka karangan."""
+
+    def _svc(self):
+        import tempfile, os
+        from candra.service import CandraService
+        import tests.test_qlobot_flow as T
+        d = tempfile.mkdtemp()
+        svc = CandraService(os.path.join(d, "c.db"), d)
+        svc.create_scrape_job(source_platform="csv_feed", input_mode="csv", inputs={"csv_text": T.SAMPLE}, collection_name="K", rights_declaration="supplier_permitted")
+        svc.jobs.run_pending()
+        return svc, svc.list_collections()[0]["id"]
+
+    def test_user_example_373000_plus_20pct(self):
+        from candra.pricing import PriceRule, compute_price
+        self.assertEqual(compute_price(373000, PriceRule.from_dict({"mode": "percent", "percent": 20})), 447600)
+        self.assertEqual(compute_price(373000, PriceRule.from_dict({"mode": "percent", "percent": 20, "extra_fixed": 6000})), 454800)  # (373000+6000)*1.2? -> modal incl packing
+        
+    def test_calc_without_fees_is_exact_for_many_inputs(self):
+        from candra.service import CandraService as S
+        import random
+        random.seed(7)
+        for _ in range(300):
+            cost = random.randint(1000, 2_000_000); extra = random.choice([0, 1000, 6000, 12500]); pct = random.choice([5, 10, 12.5, 20, 35, 50, 100])
+            price, laba = S._advice_calc(cost, [], [], "", extra, 10, 0, "", 1, pct, "cost", False)
+            from fractions import Fraction
+            import math
+            exact = Fraction(cost + extra) * Fraction(str(pct)) / 100
+            self.assertEqual(laba, math.floor(exact + Fraction(1, 2)), (cost, extra, pct))   # pembulatan setengah ke atas
+            exp = math.ceil(Fraction(cost + extra) + exact)                                  # harga = modal + markup persis, dinaikkan ke rupiah bulat
+            self.assertEqual(price, exp, (cost, extra, pct, price))
+
+    def test_calc_with_fees_profit_equals_markup_minimally(self):
+        from candra import fees as feemod
+        from candra.service import CandraService as S
+        comps = feemod.DEFAULT_PROFILES["shopee"]["components"] if isinstance(feemod.DEFAULT_PROFILES["shopee"], dict) else feemod.DEFAULT_PROFILES["shopee"]
+        import random
+        random.seed(11)
+        for _ in range(200):
+            cost = random.randint(5000, 1_500_000); extra = random.choice([0, 6000]); pct = random.choice([10, 20, 35])
+            price, laba = S._advice_calc(cost, comps, [], "", extra, 10, 0, "", 1, pct, "cost", True)
+            np_ = feemod.net_profit(price, cost, comps, [], "", extra)
+            self.assertGreaterEqual(np_["profit"], laba - 0.5, (cost, extra, pct))            # laba bersih >= markup yang diketik
+            self.assertLess(np_["profit"], laba + 2 + 0.2 * 1, (cost, extra, pct, np_))      # dan tidak lebih dari ~1 rupiah di atasnya (tidak dibesar-besarkan)
+            below = feemod.net_profit(price - 1, cost, comps, [], "", extra)["profit"]
+            self.assertLess(below, laba, (cost, extra, pct))                                 # harga 1 rupiah lebih murah sudah kurang dari markup
+
+    def test_margin_mode_matches_bigseller_formula_without_fees(self):
+        from candra.service import CandraService as S
+        price, _ = S._advice_calc(100000, [], [], "", 0, 10, 0, "", 1, 20, "margin", False)
+        self.assertEqual(price, 125000)   # (100000)/(1-0.20), rumus BigSeller
+
+    def test_rule_price_equals_recommendation_with_same_inputs(self):
+        svc, cid = self._svc()
+        svc.set_collection_settings(cid, {"price_rule": {"mode": "percent", "percent": 20, "extra_fixed": 6000, "round_step": 0, "fee_aware": True, "ending": ""}})
+        a = svc.price_advice(cid, marketplace="shopee", markup_pct=20, extra_cost=6000, round_step=1)
+        for it in a["items"]:
+            if it.get("priceNow") and it.get("suggested") and it.get("priceSource") != "rekomendasi":
+                self.assertEqual(it["priceNow"], it["suggested"], it["title"])
+        self.assertTrue(any(it.get("priceNow") for it in a["items"]))
+
+    def test_default_rounding_follows_rule_so_now_equals_recommended(self):
+        svc, cid = self._svc()
+        svc.set_collection_settings(cid, {"price_rule": {"mode": "percent", "percent": 20, "extra_fixed": 6000, "round_step": 0, "fee_aware": True, "ending": ""}})
+        a = svc.price_advice(cid, marketplace="shopee", markup_pct=20, extra_cost=6000)   # tanpa round_step -> ikut aturan (0 = tidak dibulatkan)
+        for it in a["items"]:
+            self.assertEqual(it["priceNow"], it["suggested"], it["title"])
+            self.assertEqual(it["markupAmount"], round(it["modal"] * 0.2), it["title"])
+
+    def test_saved_recommendation_is_what_upload_uses_and_clear_restores_rule(self):
+        svc, cid = self._svc()
+        svc.set_collection_settings(cid, {"price_rule": {"mode": "percent", "percent": 20, "extra_fixed": 6000, "round_step": 0, "fee_aware": True, "ending": ""}})
+        base = svc.price_advice(cid, marketplace="shopee", markup_pct=20, extra_cost=6000)
+        res = svc.apply_recommended_prices(cid, "shopee", markup_pct=20, extra_cost=6000, apply=True)
+        self.assertGreater(res["count"], 0)
+        a2 = svc.price_advice(cid, marketplace="shopee", markup_pct=35, extra_cost=6000)   # ubah markup: harga kini = yang TERSIMPAN (tidak berubah)
+        for x, y in zip(base["items"], a2["items"]):
+            self.assertEqual(y["priceSource"], "rekomendasi")
+            self.assertEqual(y["priceNow"], x["suggested"])
+            self.assertGreater(y["suggested"], x["suggested"])     # rekomendasi 35% > 20%
+        svc.clear_price_overrides(cid, "shopee")
+        a3 = svc.price_advice(cid, marketplace="shopee", markup_pct=20, extra_cost=6000)
+        for x, y in zip(base["items"], a3["items"]):
+            self.assertEqual(y["priceNow"], x["suggested"])
