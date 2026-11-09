@@ -28,6 +28,7 @@ class PriceRule:
     extra_fixed: float = 0.0
     round_step: int = 0
     round_mode: str = "up"
+    ending: str = ""  # angka terakhir harga, mis. "900" -> 125.900; "99" -> 125.099? (selalu dibulatkan KE ATAS agar tidak di bawah modal+markup+biaya)
     min_price: float = 0.0
     commission_pct: float = 0.0  # untuk mode margin & simulasi (isi dari tarif terbaru yang diverifikasi pengguna)
     margin_pct: float = 0.0
@@ -44,6 +45,9 @@ class PriceRule:
     def validate(self) -> None:
         if self.mode not in MODES:
             raise PricingError(f"mode harus salah satu dari {MODES}")
+        self.ending = str(self.ending or "").strip()
+        if self.ending and (not self.ending.isdigit() or len(self.ending) > 4):
+            raise PricingError("angka terakhir harga harus 1-4 digit angka (mis. 900 atau 999)")
         if self.round_mode not in ROUND_MODES:
             raise PricingError(f"round_mode harus salah satu dari {ROUND_MODES}")
         for name in ("percent", "fixed", "extra_fixed", "round_step", "min_price", "commission_pct", "margin_pct", "fixed_cost"):
@@ -74,6 +78,18 @@ def _round(price: Decimal, step: int, mode: str) -> Decimal:
     return q * D(step)
 
 
+def apply_ending(price, ending) -> int:
+    """Naikkan harga ke angka terdekat di atasnya yang berakhiran `ending` (jumlah digit = panjang teks: "900" -> kelipatan 1000 + 900)."""
+    price = int(price)
+    ending = str(ending or "").strip()
+    if not ending or not ending.isdigit():
+        return price
+    mod = 10 ** len(ending)
+    e = int(ending)
+    p = price - price % mod + e
+    return p if p >= price else p + mod
+
+
 def compute_price(cost, rule: PriceRule) -> int:
     cost = D(cost)
     if cost <= 0:
@@ -97,7 +113,7 @@ def compute_price(cost, rule: PriceRule) -> int:
     price = price.quantize(Decimal(1), rounding=ROUND_HALF_UP)
     if price <= 0:
         raise PricingError("hasil harga <= 0")
-    return int(price)
+    return apply_ending(int(price), rule.ending)
 
 
 def simulate(cost, price, commission_pct: float = 0.0, fixed_cost: float = 0.0) -> dict:

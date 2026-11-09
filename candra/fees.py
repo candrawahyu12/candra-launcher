@@ -214,7 +214,7 @@ def net_profit(price, cost, comps, overrides=None, category_text: str = "", extr
 
 
 def solve_price(cost, comps, overrides=None, category_text: str = "", margin_pct: float = 10.0, extra_cost=0, step: int = 1,
-                markup_fixed=0) -> int:
+                markup_fixed=0, ending: str = "") -> int:
     """Harga jual terkecil (dibulatkan ke atas ke kelipatan `step`) sehingga laba bersih >= margin% dari harga jual,
     setelah SEMUA biaya (persen, tetap, batas maksimum, tarif dinamis kategori) dan extra_cost (packing, dll)."""
     cost, extra, m, mk = D(cost), D(extra_cost), D(margin_pct) / 100, D(markup_fixed)
@@ -241,4 +241,5 @@ def solve_price(cost, comps, overrides=None, category_text: str = "", margin_pct
             lo = mid
     best = lo if ok(lo) else hi
     step = max(1, int(step))
-    return -(-best // step) * step
+    from .pricing import apply_ending
+    return apply_ending(-(-best // step) * step, ending)  # dinaikkan ke angka berakhiran pilihan pengguna: laba tidak pernah berkurang

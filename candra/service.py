@@ -19,7 +19,7 @@ from .db import DB
 from .exporter import export_csv, list_templates
 from .jobs import RIGHTS, JobError, JobManager, parse_url_lines
 from .optimizer import AIProvider, GeminiProvider, gemini_search, RuleBasedProvider, optimize_product, similarity, validate_ai_output
-from .pricing import PriceRule, PricingError, compute_price, decorate_title, simulate
+from .pricing import PriceRule, PricingError, compute_price, decorate_title, simulate, apply_ending
 from .uploader import (OK_RIGHTS, AssistedFillConnector, ExportFileConnector, OfficialApiConnector, SandboxConnector, UploadError, UploadManager,
                        build_payload, _validate_config)
 from . import aierr, attributes, feeai, feecat, feetable, filetext, studio
@@ -2668,7 +2668,7 @@ class CandraService:
             ovs, fee_status = [], "MANUAL"
         rule_set = bool(cfg.get("price_rule")) and (rule.mode in ("tiers", "margin") or rule.percent > 0 or rule.fixed > 0 or rule.extra_fixed > 0)
         fee_aware = bool(marketplace and rule.fee_aware and rule_set)  # harga kini = markup Anda + biaya platform (sama dengan yang dipakai upload)
-        r0 = PriceRule.from_dict({**rule.__dict__, "round_step": 0, "fee_aware": False})
+        r0 = PriceRule.from_dict({**rule.__dict__, "round_step": 0, "fee_aware": False, "ending": ""})
         rows = []
         for p in self._products_in(collection_id, product_ids)[:500]:
             title = self._eff(p)[0]
@@ -2685,13 +2685,13 @@ class CandraService:
                     now_price = int(ov["price"])
                 elif fee_aware:
                     now_price = feemod.solve_price(cost, comps, ovs, cat, 0.0, 0, max(1, int(rule.round_step or 1)),
-                                                   max(0, compute_price(cost, r0) - int(round(float(cost)))))
+                                                   max(0, compute_price(cost, r0) - int(round(float(cost)))), rule.ending)
                 else:
                     now_price = compute_price(cost, rule) if rule_set else None
             except (PricingError, feemod.FeeError):
                 now_price = None
             try:
-                floor = feemod.solve_price(cost, comps, ovs, cat, margin, extra_cost, round_step, markup_fixed)
+                floor = feemod.solve_price(cost, comps, ovs, cat, margin, extra_cost, round_step, markup_fixed, rule.ending)
                 even = feemod.solve_price(cost, comps, ovs, cat, 0.0, extra_cost, 1)
             except feemod.FeeError:
                 rows.append({"id": p["id"], "title": title[:70], "verdict": "BIAYA_TERLALU_BESAR"})
@@ -2713,7 +2713,7 @@ class CandraService:
                 verdict = "KOMPETITIF"
             suggested = None
             if comps_p:
-                suggested = max(floor, int(-(-min(now_price or med, med) // round_step) * round_step))
+                suggested = max(floor, apply_ending(int(-(-min(now_price or med, med) // round_step) * round_step), rule.ending))
             else:
                 suggested = floor
             at_floor = feemod.net_profit(floor, cost, comps, ovs, cat, extra_cost)
@@ -2723,7 +2723,7 @@ class CandraService:
                 if not vc:
                     continue
                 try:
-                    vf = feemod.solve_price(vc, comps, ovs, cat, margin, extra_cost, round_step, markup_fixed)
+                    vf = feemod.solve_price(vc, comps, ovs, cat, margin, extra_cost, round_step, markup_fixed, rule.ending)
                     var_rows.append({"label": " / ".join(str(x) for x in json.loads(v_["option_values_json"] or "{}").values()) or "-", "cost": vc,
                                      "price": vf, "breakdown": feemod.net_profit(vf, vc, comps, ovs, cat, extra_cost)})
                 except feemod.FeeError:
@@ -2751,6 +2751,7 @@ class CandraService:
             raise ServiceError("margin/biaya tambahan tidak valid")
         prof = self.get_fee_profile(marketplace)
         comps, ovs = prof["components"], prof.get("overrides") or []
+        ending = PriceRule.from_dict(json.loads(self._need_collection(collection_id)["settings_json"] or "{}").get("price_rule")).ending
         changes, skipped = [], 0
         for p in self._products_in(collection_id, product_ids)[:500]:
             title = self._eff(p)[0]
@@ -2770,11 +2771,11 @@ class CandraService:
                 if not c:
                     continue
                 try:
-                    floor = feemod.solve_price(c, comps, ovs, cat, margin, extra_cost, round_step, markup_fixed)
+                    floor = feemod.solve_price(c, comps, ovs, cat, margin, extra_cost, round_step, markup_fixed, ending)
                 except feemod.FeeError:
                     skipped += 1
                     continue
-                price = floor if med is None else max(floor, int(-(-(med * c / cmax) // round_step) * round_step))
+                price = floor if med is None else max(floor, apply_ending(int(-(-(med * c / cmax) // round_step) * round_step), ending))
                 changes.append({"productId": p["id"], "variantId": v["id"] or 0, "cost": c, "price": int(price), "floor": floor})
         if apply:
             ts = now()

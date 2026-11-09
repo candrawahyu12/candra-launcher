@@ -529,7 +529,7 @@ function settingsForm(init) {
     reqimg: h("input", { type: "checkbox", checked: !!init.require_processed_images }),
     feeAware: h("input", { type: "checkbox", checked: !!pr.fee_aware }),
     tiers: h("textarea", { style: "min-height:70px", placeholder: "satu baris per tingkat: dari-sampai:persen  (contoh 0-50000:40)" }),
-    step: h("input", { type: "number", value: pr.round_step ?? 0, style: "width:90px" }), rmode: h("select", {}, ...[["up", "ke atas"], ["nearest", "terdekat"], ["down", "ke bawah"]].map(([k, l]) => h("option", { value: k }, l))),
+    step: h("input", { type: "number", value: pr.round_step ?? 0, style: "width:90px" }), ending: h("input", { value: pr.ending ?? "", placeholder: "mis. 900", maxlength: 4, inputmode: "numeric", style: "width:90px" }), rmode: h("select", {}, ...[["up", "ke atas"], ["nearest", "terdekat"], ["down", "ke bawah"]].map(([k, l]) => h("option", { value: k }, l))),
     tp: h("textarea", { style: "min-height:60px" }), ts: h("textarea", { style: "min-height:60px" }), dp: h("textarea", { style: "min-height:60px" }), ds: h("textarea", { style: "min-height:60px" }),
     ship: h("input", { type: "number", min: 1, max: 90, value: init.ship_days ?? "", style: "width:80px" }),
     tmax: h("input", { type: "number", min: 20, max: 255, value: init.title_max ?? 120, style: "width:90px", title: "Shopee ±120, TikTok Shop 255, Tokopedia ±70 (perkiraan umum; cocokkan dengan Seller Center)" }),
@@ -540,7 +540,7 @@ function settingsForm(init) {
   f.tiers.value = (pr.tiers || []).map(t => (t.min ?? 0) + "-" + (t.max ?? "") + ":" + (t.percent ?? 0)).join("\n");
   const split = s => s.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
   const get = () => {
-    const rule = { mode: f.mode.value, round_step: +f.step.value || 0, round_mode: f.rmode.value, extra_fixed: +f.extra.value || 0, commission_pct: +f.comm.value || 0, fixed_cost: +f.fcost.value || 0, fee_aware: f.feeAware.checked };
+    const rule = { mode: f.mode.value, round_step: +f.step.value || 0, round_mode: f.rmode.value, ending: f.ending.value.replace(/\D/g, "").slice(0, 4), extra_fixed: +f.extra.value || 0, commission_pct: +f.comm.value || 0, fixed_cost: +f.fcost.value || 0, fee_aware: f.feeAware.checked };
     if (rule.mode === "percent") rule.percent = +f.percent.value || 0;
     if (rule.mode === "fixed") rule.fixed = +f.fixed.value || 0;
     if (rule.mode === "tiers") rule.tiers = split(f.tiers.value).map(l => { const m = l.match(/^(\d+)\s*-\s*(\d*)\s*:\s*([\d.]+)$/); if (!m) throw new Error("Format tingkat salah: " + l); return { min: +m[1], max: m[2] ? +m[2] : null, percent: +m[3], fixed: 0 }; });
@@ -551,7 +551,10 @@ function settingsForm(init) {
     return s;
   };
   const el = h("div", {}, h("h3", {}, "Markup harga"), h("div", { class: "row" }, h("label", {}, "Jenis", f.mode), h("label", {}, "Persen", f.percent), h("label", {}, "Nominal", f.fixed), h("label", {}, "Tambahan Rp", f.extra)),
-    h("label", { class: "gap" }, "Advanced markup (bertingkat)", f.tiers), h("div", { class: "row gap" }, h("label", {}, "Pembulatan kelipatan", f.step), h("label", {}, "Arah", f.rmode)),
+    h("label", { class: "gap" }, "Advanced markup (bertingkat)", f.tiers), h("div", { class: "row gap" }, h("label", {}, "Angka terakhir harga", f.ending),
+      h("span", { class: "small mut", style: "flex:1;min-width:260px" }, "Isi sekali, dipakai ke semua produk & varian. Contoh: 900 → 125.900 · 999 → 125.999 · 500 → 125.500 · 00 → 125.100 (angka bulat ratusan). Harga selalu dinaikkan ke angka itu (tidak pernah turun di bawah modal + markup + biaya). Kosongkan bila tidak mau.")),
+    h("div", { class: "row gap" }, h("label", {}, "Pembulatan kelipatan", f.step), h("label", {}, "Arah", f.rmode),
+      h("span", { class: "small mut", style: "flex:1;min-width:260px" }, "Pembulatan kelipatan = harga dibulatkan ke KELIPATAN angka itu. Contoh 1000 → 125.400 jadi 126.000; 100 → tetap 125.400. Hati-hati: 999 berarti kelipatan 999 (1.998, 2.997, 3.996, ...), bukan berakhiran 999 — untuk berakhiran 999 pakai 'Angka terakhir harga' di atas dan isi pembulatan 0 atau 100.")),
     h("h3", { class: "gap" }, "Biaya platform"),
     h("label", { class: "chk" }, f.feeAware, "Tambahkan biaya platform otomatis ke harga jual saat upload/export (profil biaya marketplace tujuan: komisi %, biaya proses, batas maksimum, tarif kategori)"),
     h("div", { class: "small mut" }, "Markup di atas = laba bersih yang Anda mau. Aplikasi menambahkan biaya platform di atasnya (toko non-Mall). Harga manual (✎) atau harga rekomendasi yang sudah diterapkan tetap menang. Tarif diatur/diunggah lewat tombol 'Biaya platform' di bawah."),

@@ -344,10 +344,10 @@ def build_payload(db: DB, product_id: int, target: str, cfg: dict, index: int = 
                 sim = simulate(v["price_original"], price, rule.commission_pct, rule.fixed_cost)
             elif fee_prof:
                 cat_text = feecat.info(db, p, mkt, title, fee_prof)[0]
-                r0 = PriceRule.from_dict({**rule.__dict__, "round_step": 0, "fee_aware": False})  # markup Anda = laba bersih yang diinginkan
+                r0 = PriceRule.from_dict({**rule.__dict__, "round_step": 0, "fee_aware": False, "ending": ""})  # markup Anda = laba bersih yang diinginkan
                 markup = compute_price(v["price_original"], r0) - int(round(float(v["price_original"])))
                 price = feemod.solve_price(v["price_original"], fee_prof["components"], fee_prof.get("overrides"), cat_text, 0.0, 0,
-                                           max(1, int(rule.round_step or 1)), max(0, markup))
+                                           max(1, int(rule.round_step or 1)), max(0, markup), rule.ending)
                 np_ = feemod.net_profit(price, v["price_original"], fee_prof["components"], fee_prof.get("overrides"), cat_text)
                 sim = {"cost": float(v["price_original"]), "price": float(price), "fee": np_["total"], "profit": np_["profit"],
                        "margin_pct": np_["marginPct"], "below_cost": np_["profit"] < 0}

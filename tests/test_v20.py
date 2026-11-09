@@ -153,3 +153,54 @@ class TitleNoCutTest(unittest.TestCase):
         self.assertEqual((dd["prefix"], dd["suffix"]), ("AWAL", "AKHIR"))
         self.assertTrue(sim["payload"]["description"].startswith("AWAL") and sim["payload"]["description"].endswith("AKHIR"))
         self.assertIn(dd["body"], sim["payload"]["description"])
+
+
+class PriceEndingTest(unittest.TestCase):
+    def test_apply_ending(self):
+        from candra.pricing import apply_ending
+        self.assertEqual(apply_ending(125400, "900"), 125900)
+        self.assertEqual(apply_ending(125900, "900"), 125900)
+        self.assertEqual(apply_ending(125901, "900"), 126900)
+        self.assertEqual(apply_ending(125400, "999"), 125999)
+        self.assertEqual(apply_ending(125010, "00"), 125100)
+        self.assertEqual(apply_ending(125400, ""), 125400)
+
+    def test_rule_and_validation(self):
+        from candra.pricing import PriceRule, PricingError, compute_price
+        r = PriceRule.from_dict({"mode": "percent", "percent": 35, "ending": "900"})
+        p = compute_price(100000, r)
+        self.assertEqual(p % 1000, 900)
+        self.assertGreaterEqual(p, 135000)
+        self.assertLess(p, 136000 + 1000)
+        with self.assertRaises(PricingError):
+            PriceRule.from_dict({"mode": "percent", "ending": "9x9"})
+
+    def test_fee_path_never_below_without_ending(self):
+        from candra import fees as feemod
+        prof = feemod.DEFAULT_PROFILES["shopee"]
+        comps = prof["components"] if isinstance(prof, dict) else prof
+        base = feemod.solve_price(100000, comps, [], "", 0.0, 0, 100, 20000)
+        end = feemod.solve_price(100000, comps, [], "", 0.0, 0, 100, 20000, "999")
+        self.assertEqual(end % 1000, 999)
+        self.assertGreaterEqual(end, base)
+        self.assertLess(end - base, 1000)
+
+    def test_end_to_end_all_variant_prices_end_with_setting(self):
+        import tempfile, os
+        from candra.service import CandraService
+        import tests.test_qlobot_flow as T
+        d = tempfile.mkdtemp()
+        svc = CandraService(os.path.join(d, "c.db"), d)
+        svc.create_scrape_job(source_platform="csv_feed", input_mode="csv", inputs={"csv_text": T.SAMPLE}, collection_name="K", rights_declaration="supplier_permitted")
+        svc.jobs.run_pending()
+        cid = svc.list_collections()[0]["id"]
+        svc.set_collection_settings(cid, {"price_rule": {"mode": "percent", "percent": 35, "round_step": 0, "ending": "900"}})
+        pv = svc.preview_upload(collection_id=cid, target="sandbox", selection={"mode": "all"}, config={"marketplace": "shopee"})
+        seen = 0
+        for it in pv["items"]:
+            sim = svc.simulate_listing(pv["batchId"], it["productId"])
+            for v in sim["payload"]["variants"]:
+                if v["price"]:
+                    seen += 1
+                    self.assertEqual(v["price"] % 1000, 900, v)
+        self.assertGreater(seen, 0)
