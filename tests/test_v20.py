@@ -290,3 +290,19 @@ class MarkupExactTest(unittest.TestCase):
         a3 = svc.price_advice(cid, marketplace="shopee", markup_pct=20, extra_cost=6000)
         for x, y in zip(base["items"], a3["items"]):
             self.assertEqual(y["priceNow"], x["suggested"])
+
+    def test_product_row_shows_per_variant_ranges_not_only_max_variant(self):
+        svc, cid = self._svc()
+        svc.set_collection_settings(cid, {"price_rule": {"mode": "percent", "percent": 20, "extra_fixed": 6000, "round_step": 0, "fee_aware": True, "ending": ""}})
+        a = svc.price_advice(cid, marketplace="shopee", markup_pct=20, extra_cost=6000)
+        multi = [it for it in a["items"] if len(it.get("variants") or []) > 1]
+        self.assertTrue(multi)
+        for it in multi:
+            costs = [v["cost"] for v in it["variants"]]
+            self.assertEqual((it["costMin"], it["costMax"]), (min(costs), max(costs)))
+            self.assertEqual(it["suggMin"], min(v["price"] for v in it["variants"]))
+            self.assertEqual(it["suggMax"], max(v["price"] for v in it["variants"]))
+            self.assertLess(it["costMin"], it["costMax"])
+            for v in it["variants"]:   # tiap varian: laba bersih = markup% x (harga sumber + packing)
+                self.assertEqual(v["markupAmount"], int(round((v["cost"] + 6000) * 0.2)))
+                self.assertGreaterEqual(v["now"], v["breakEven"])

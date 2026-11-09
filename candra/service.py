@@ -2746,17 +2746,32 @@ class CandraService:
                 suggested = floor
             at_floor = feemod.net_profit(floor, cost, comps, ovs, cat, extra_cost) if include_fees else None
             var_rows = []
-            for v_ in self.db.query("SELECT price_original, option_values_json FROM product_variants WHERE product_id=? ORDER BY id LIMIT 60", (p["id"],)):
+            for v_ in self.db.query("SELECT id, price_original, option_values_json FROM product_variants WHERE product_id=? ORDER BY id LIMIT 60", (p["id"],)):
                 vc = v_["price_original"]
                 if not vc:
                     continue
                 try:
                     vf, vlaba = self._advice_calc(vc, comps, ovs, cat, extra_cost, margin, markup_fixed, rule.ending, round_step, markup_pct, markup_mode, include_fees)
+                    vov = self.db.one("SELECT price FROM price_overrides WHERE product_id=? AND variant_id IN (?, 0) ORDER BY variant_id DESC LIMIT 1", (p["id"], v_["id"]))
+                    if vov:
+                        vnow, vsrc = int(vov["price"]), "rekomendasi"
+                    elif fee_aware:
+                        vm, vp = rule_markup(vc, rule)
+                        vnow, vsrc = feemod.solve_price(vc, comps, ovs, cat, 0.0, vp, max(1, int(rule.round_step or 1)), max(0, vm), rule.ending), "aturan"
+                    else:
+                        vnow, vsrc = (compute_price(vc, rule) if rule_set else None), "aturan"
                     var_rows.append({"label": " / ".join(str(x) for x in json.loads(v_["option_values_json"] or "{}").values()) or "-", "cost": vc,
-                                     "price": vf, "markupAmount": vlaba, "breakdown": feemod.net_profit(vf, vc, comps, ovs, cat, extra_cost) if include_fees else None})
-                except feemod.FeeError:
+                                     "price": vf, "markupAmount": vlaba, "now": vnow, "nowSource": vsrc if vnow else None,
+                                     "breakEven": feemod.solve_price(vc, comps, ovs, cat, 0.0, extra_cost, 1),
+                                     "breakdown": feemod.net_profit(vf, vc, comps, ovs, cat, extra_cost) if include_fees else None})
+                except (feemod.FeeError, PricingError):
                     continue
-            rows.append({"id": p["id"], "title": title[:70], "cost": cost, "variants": var_rows, "feeCategory": cat if len(cat) < 160 else "", "feeRates": feemod.match_info(comps, ovs, cat), "feeSource": cat_src, "priceNow": now_price, "priceSource": price_source, "floorForMargin": floor,
+            def _rng(key, rows_):
+                xs = [x[key] for x in rows_ if x.get(key)]
+                return (min(xs), max(xs)) if xs else (None, None)
+            cmn, cmx = _rng("cost", var_rows); nmn, nmx = _rng("now", var_rows); smn, smx = _rng("price", var_rows); emn, emx = _rng("breakEven", var_rows)
+            ranges = {"costMin": cmn, "costMax": cmx, "nowMin": nmn, "nowMax": nmx, "suggMin": smn, "suggMax": smx, "evenMin": emn, "evenMax": emx}
+            rows.append({"id": p["id"], "title": title[:70], "cost": cost, "variants": var_rows, **ranges, "feeCategory": cat if len(cat) < 160 else "", "feeRates": feemod.match_info(comps, ovs, cat), "feeSource": cat_src, "priceNow": now_price, "priceSource": price_source, "floorForMargin": floor,
                          "breakEven": even, "compMin": cmin, "compMedian": med, "compCount": len(comps_p), "aiHidden": 0 if use_ai_prices else ai_n,
                          "verdict": verdict, "suggested": suggested, "atFloor": at_floor, "markupAmount": laba_t, "modal": float(cost) + float(extra_cost), "priceBeforeFees": float(cost) + float(extra_cost) + laba_t,
                          "nowBreakdown": feemod.net_profit(now_price, cost, comps, ovs, cat, extra_cost) if now_price else None})

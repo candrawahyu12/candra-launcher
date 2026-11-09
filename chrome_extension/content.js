@@ -140,17 +140,20 @@ function sendBg(msg, cb, tries) {
   }
   // Harga yang TAMPIL di halaman (blok harga di bawah judul). Harga coret diabaikan; rentang "Rp A - Rp B" dikembalikan apa adanya
   // (artinya varian belum terpilih lengkap), sehingga pemanggil menolaknya.
-  const PRICE_ONE = /^Rp\s?[\d.]+(?:,\d+)?(?:\s*[-–]\s*Rp\s?[\d.]+(?:,\d+)?)?$/i;
+  const PRICE_TOK = /^(?:Rp\s?[\d.,]+\s*[-–~]?\s*)+$/i;
+  // Harga yang TAMPIL di blok harga (di bawah judul). Harga coret diabaikan. Bila halaman menampilkan RENTANG ("Rp A - Rp B", dalam bentuk
+  // apa pun) hasilnya berisi "-" sehingga ditolak pemanggil: kita TIDAK PERNAH menebak satu angka dari rentang.
   function currentPrice() {
     const h = document.querySelector("h1");
+    const clean = e => text(e).replace(/\s+/g, " ").trim();
     const struck = e => { for (let n = e, d = 0; n && d < 3; n = n.parentElement, d++) { const t = getComputedStyle(n).textDecorationLine || ""; if (/line-through/.test(t)) return true; } return false; };
+    const hasStruck = e => [...e.querySelectorAll("*")].some(x => /Rp/.test(text(x)) && struck(x));
     for (let n = h, d = 0; n && d < 8; n = n.parentElement, d++) {
-      const hit = [...n.querySelectorAll("div,span,p,b,strong")].find(e => !e.closest("#candra-panel") && e.children.length <= 3 && PRICE_ONE.test(text(e).replace(/\s+/g, " ")) && !struck(e) && e.getClientRects().length);
-      if (hit) return text(hit).replace(/\s+/g, " ");
+      // urutan dokumen: pembungkus terluar yang ISINYA HANYA angka harga (tanpa harga coret) muncul lebih dulu, jadi rentang tidak terbaca separuh
+      const hit = [...n.querySelectorAll("div,span,p,b,strong")].find(e => !e.closest("#candra-panel") && /^Rp\s?[\d.,]+/i.test(clean(e)) && PRICE_TOK.test(clean(e)) && !struck(e) && !hasStruck(e) && e.getClientRects().length);
+      if (hit) return clean(hit);
     }
-    const scope = (h && (h.closest("section,main,div[class]") || document.body)) || document.body;
-    const m = (scope.innerText || text(scope)).match(rx("price_regex") || /Rp\s?[\d.]+/i);
-    return m ? m[0] : "";
+    return "";
   }
   // Klik tiap kombinasi varian di halaman yang SEDANG DIBUKA pengguna, baca harga/stok/foto yang tampil.
   // Data produk dari balasan yang SUDAH diminta halaman sendiri (hook.js + pdp.js): varian, harga & foto per varian, deskripsi lengkap.
@@ -181,17 +184,16 @@ function sendBg(msg, cb, tries) {
   const keyOf = o => Object.values(o || {}).map(x => String(x).trim().toLowerCase()).sort().join("|");
   const priceNum = v => { const t = String(v == null ? "" : v); return /[-–]/.test(t) ? 0 : (Number(t.replace(/[^\d]/g, "")) || 0); };
   const isOff = el => !!el && (el.disabled || el.getAttribute("aria-disabled") === "true" || /disabled|habis|sold.?out|unavailable/i.test(el.className || ""));
-  // tunggu harga stabil (sama 3x berturut-turut) dan - bila sama dengan harga sebelumnya - beri waktu cukup agar tidak membaca harga lama
+  // Setelah klik: tunggu minimal `minMs`, lalu sampai harga TIDAK berubah selama ~0,6 detik (Shopee memperbarui harga dengan jeda).
   async function settledPrice(prev, minMs) {
-    const t0 = Date.now(); let last = null, same = 0;
-    while (Date.now() - t0 < 3000) {
+    const t0 = Date.now(); let last = null, since = Date.now();
+    while (Date.now() - t0 < 4500) {
       await sleep(90);
       const c = currentPrice();
-      if (c === last) same++; else { last = c; same = 0; }
-      const waited = Date.now() - t0;
-      if (same >= 2 && (c !== prev || waited >= minMs) && !/[-–]/.test(c) && c) return c;
+      if (c !== last) { last = c; since = Date.now(); }
+      if (c && !/[-–~]/.test(c) && Date.now() - t0 >= minMs && Date.now() - since >= 500) return c;
     }
-    return last || "";
+    return last && !/[-–~]/.test(last) ? last : "";
   }
   async function readCombos(order, minMs) {
     const els = variantEls(), keys = Object.keys(els);
@@ -219,7 +221,7 @@ function sendBg(msg, cb, tries) {
     return out;
   }
   const comboCount = () => Object.values(variantEls()).reduce((n, g) => n * g.length, 1);
-  async function deepVariants() { return readCombos("forward", 650); }
+  async function deepVariants() { return readCombos("forward", 500); }
   async function verifyVariants(d, st) {
     if (st.deepVariants === false) return { ok: true };
     const keys = Object.keys(variantEls());
@@ -228,16 +230,32 @@ function sendBg(msg, cb, tries) {
     const total = comboCount();
     if (total > 150) return { skip: "terlalu banyak kombinasi varian (" + total + ") untuk dicek satu per satu" };
     setNote("memeriksa harga tiap varian di halaman (" + total + " kombinasi)...");
-    let dv = await readCombos("forward", 650);
-    const live = () => dv.filter(x => !x.soldOut);
-    // semua harga sama padahal banyak varian -> baca ulang dari urutan terbalik dengan jeda lebih lama; bila beda, pakai bacaan ulang
-    const ps = live().map(x => priceNum(x.price));
-    if (ps.length >= 3 && ps.every(x => x > 0) && new Set(ps).size === 1) {
-      setNote("harga semua varian sama, memeriksa ulang...");
-      const dv2 = await readCombos("reverse", 1000);
-      const by2 = new Map(dv2.map(x => [keyOf(x.options), x]));
-      dv = dv.map(x => { const y = by2.get(keyOf(x.options)); return y && !y.soldOut && priceNum(y.price) > 0 && priceNum(y.price) !== priceNum(x.price) ? y : x; });
+    // Dua kali baca dengan URUTAN BERLAWANAN (angka basi dari varian sebelumnya akan ketahuan karena "sebelumnya"-nya berbeda).
+    // Beda = baca ke-3 dengan jeda lebih lama, ambil nilai yang muncul 2x; tidak ada yang cocok -> produk dilewati.
+    setNote("memeriksa harga tiap varian (baca 1/2: " + total + " kombinasi)...");
+    const p1 = await readCombos("forward", 500);
+    setNote("memeriksa ulang harga tiap varian (baca 2/2, urutan terbalik)...");
+    const p2 = await readCombos("reverse", 500);
+    const m2 = new Map(p2.map(x => [keyOf(x.options), x]));
+    const diff = p1.filter(x => { const y = m2.get(keyOf(x.options)); return !x.soldOut && y && !y.soldOut && priceNum(x.price) !== priceNum(y.price); });
+    let m3 = null, m4 = null;
+    if (diff.length) {   // baca pelan (jeda 1,6 dtk) dua kali dengan urutan berlawanan; nilai dipakai hanya bila kedua bacaan pelan itu sama
+      setNote("ada " + diff.length + " harga yang belum cocok, membaca ulang pelan-pelan...");
+      m3 = new Map((await readCombos("forward", 1600)).map(x => [keyOf(x.options), x]));
+      m4 = new Map((await readCombos("reverse", 1600)).map(x => [keyOf(x.options), x]));
     }
+    let unstable = 0;
+    const dv = p1.map(x => {
+      const k = keyOf(x.options), y = m2.get(k);
+      if (x.soldOut || (y && y.soldOut)) return { ...x, soldOut: true };
+      const a = priceNum(x.price), b = y ? priceNum(y.price) : 0;
+      if (a === b) return x;
+      const c = m3 && m3.get(k) ? priceNum(m3.get(k).price) : 0, e = m4 && m4.get(k) ? priceNum(m4.get(k).price) : 0;
+      if (c && c === e) return { ...x, price: String(c) };
+      if (c && (c === a || c === b) && (e === a || e === b || !e)) return { ...x, price: String(c) };
+      unstable++; return { ...x, price: "" };
+    });
+    if (unstable) return { skip: unstable + " varian harganya tidak stabil / berubah-ubah saat dibaca (mis. " + Object.values((dv.find(x => !x.soldOut && priceNum(x.price) <= 0) || { options: {} }).options).join("/") + ") — produk dilewati agar harga tidak salah" };
     const alive = dv.filter(x => !x.soldOut);
     if (!alive.length) return { skip: "semua varian habis / tidak bisa dibaca" };
     const bad = alive.filter(x => priceNum(x.price) <= 0);
@@ -247,7 +265,7 @@ function sendBg(msg, cb, tries) {
       .filter(v => !(v.stock !== "" && v.stock != null && Number(v.stock) === 0));
     if (!d.variants.length) return { skip: "semua varian habis" };
     d.price = Math.min(...d.variants.map(v => v.price));
-    d._priceFix = { total: dv.length, soldOutSkipped: dv.length - alive.length, uniform: new Set(d.variants.map(v => v.price)).size === 1 };
+    d._priceFix = { total: dv.length, soldOutSkipped: dv.length - alive.length, uniform: new Set(d.variants.map(v => v.price)).size === 1, passes: diff.length ? 4 : 2, corrected: diff.length };
     return { ok: true };
   }
   // Kesehatan pembacaan: bagian mana yang tidak terbaca (tampilan marketplace mungkin berubah).
